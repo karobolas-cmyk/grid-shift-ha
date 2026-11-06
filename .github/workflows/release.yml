@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify source
+        run: |
+          python -m pip install pytest ruff
+          ruff check custom_components tests
+          pytest
+
+      - name: Build Home Assistant package
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#release/}"
+          version="${tag#v}"
+          zip -r "gridshift-battery-${version}.zip" custom_components hacs.json README.md LICENSE
+          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
+          echo "RELEASE_ASSET=gridshift-battery-${version}.zip" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "GridShift ${RELEASE_TAG}" \
+              --generate-notes
+          fi

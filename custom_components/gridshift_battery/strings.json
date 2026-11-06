@@ -1,0 +1,119 @@
+{
+  "title": "GridShift Battery Optimizer",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fronius battery control",
+        "description": "Choose entities created by callifo/fronius_modbus.",
+        "data": {
+          "soc_entity": "Battery state of charge",
+          "control_mode_entity": "Storage control mode",
+          "charge_power_entity": "Grid charge power",
+          "discharge_power_entity": "Grid discharge power (optional)"
+        }
+      },
+      "energy": {
+        "title": "Home energy inputs",
+        "description": "Choose all three smart-meter phase currents in L1, L2, L3 order. The price entity needs a future price-list attribute.",
+        "data": {
+          "price_entity": "Electricity price",
+          "house_load_entity": "House load",
+          "ev_power_entities": "EV charger power entities (optional)",
+          "solar_power_entities": "Solar production power entities (optional)",
+          "outdoor_temperature_entity": "Outdoor temperature (optional)",
+          "phase_current_entities": "Grid currents L1, L2, L3"
+        }
+      },
+      "limits": {
+        "title": "Safety and optimization limits",
+        "description": "Control starts disabled. Review the recommendation sensors before enabling the switch.",
+        "data": {
+          "battery_capacity_kwh": "Usable battery capacity",
+          "min_soc_pct": "Minimum state of charge",
+          "max_target_soc_pct": "Maximum optimization target",
+          "max_charge_power_w": "Maximum grid charge power",
+          "max_discharge_power_w": "Maximum grid discharge power",
+          "main_fuse_a": "Main fuse per phase",
+          "phase_safety_margin_a": "Safety margin per phase",
+          "phase_sensor_max_age_seconds": "Maximum phase sensor age",
+          "nominal_voltage_v": "Nominal phase voltage",
+          "interval_minutes": "Planning interval",
+          "horizon_hours": "Planning horizon",
+          "expensive_quantile": "Expensive-price quantile",
+          "min_savings_percent": "Minimum gross saving",
+          "round_trip_efficiency": "Round-trip efficiency",
+          "cycle_cost": "Battery cycle cost in price-unit/kWh",
+          "capacity_tariff_enabled": "Enable capacity tariff",
+          "capacity_tariff_model": "Capacity-tariff peak model",
+          "capacity_tariff_rate_per_kw": "Demand rate",
+          "capacity_tariff_reference_kw": "Current billing-period reference peak",
+          "capacity_tariff_start_hour": "Capacity-tariff window starts",
+          "capacity_tariff_end_hour": "Capacity-tariff window ends",
+          "house_load_includes_ev": "House load already includes EV charging",
+          "swedish_winter_mode": "Swedish winter model (15 Nov–15 Mar)",
+          "winter_solar_factor": "Winter solar forecast confidence",
+          "heating_balance_temp_c": "Heating reserve balance temperature",
+          "heating_reserve_kw_per_c": "Heating reserve per degree",
+          "charge_mode_option": "Fronius charge mode option",
+          "discharge_mode_option": "Fronius discharge mode option",
+          "auto_mode_option": "Fronius automatic mode option",
+          "mode_settle_seconds": "Wait after changing Fronius mode"
+        }
+      }
+    },
+    "error": {
+      "entity_unavailable": "One or more selected entities are unavailable.",
+      "three_phases_required": "Select exactly three phase-current entities.",
+      "target_not_above_minimum": "The target state of charge must exceed the minimum.",
+      "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
+      "required_control_modes_missing": "The selected storage-control entity does not expose Auto, Charge from Grid, and the configured optional Discharge to Grid mode."
+    },
+    "abort": {
+      "already_configured": "This Fronius battery is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optimization limits",
+        "data": {
+          "battery_capacity_kwh": "Usable battery capacity",
+          "min_soc_pct": "Minimum state of charge",
+          "max_target_soc_pct": "Maximum optimization target",
+          "max_charge_power_w": "Maximum grid charge power",
+          "max_discharge_power_w": "Maximum grid discharge power",
+          "main_fuse_a": "Main fuse per phase",
+          "phase_safety_margin_a": "Safety margin per phase",
+          "phase_sensor_max_age_seconds": "Maximum phase sensor age",
+          "nominal_voltage_v": "Nominal phase voltage",
+          "interval_minutes": "Planning interval",
+          "horizon_hours": "Planning horizon",
+          "expensive_quantile": "Expensive-price quantile",
+          "min_savings_percent": "Minimum gross saving",
+          "round_trip_efficiency": "Round-trip efficiency",
+          "cycle_cost": "Battery cycle cost in price-unit/kWh",
+          "capacity_tariff_enabled": "Enable capacity tariff",
+          "capacity_tariff_model": "Capacity-tariff peak model",
+          "capacity_tariff_rate_per_kw": "Demand rate",
+          "capacity_tariff_reference_kw": "Current billing-period reference peak",
+          "capacity_tariff_start_hour": "Capacity-tariff window starts",
+          "capacity_tariff_end_hour": "Capacity-tariff window ends",
+          "house_load_includes_ev": "House load already includes EV charging",
+          "swedish_winter_mode": "Swedish winter model (15 Nov–15 Mar)",
+          "winter_solar_factor": "Winter solar forecast confidence",
+          "heating_balance_temp_c": "Heating reserve balance temperature",
+          "heating_reserve_kw_per_c": "Heating reserve per degree",
+          "charge_mode_option": "Fronius charge mode option",
+          "discharge_mode_option": "Fronius discharge mode option",
+          "auto_mode_option": "Fronius automatic mode option",
+          "mode_settle_seconds": "Wait after changing Fronius mode"
+        }
+      }
+    },
+    "error": {
+      "target_not_above_minimum": "The target state of charge must exceed the minimum.",
+      "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
+      "required_control_modes_missing": "The selected storage-control entity does not expose the configured GridShift modes."
+    }
+  }
+}

@@ -39,6 +39,9 @@ Open the private live-control dashboard:
   Ohme, Peblar, Amina, and generic Home Assistant EV power sensors.
 - House-load, multi-source solar, multiple EV chargers, and L1/L2/L3 entity
   mapping.
+- Phase-current freshness protection with a configurable maximum age. Stale,
+  unavailable, or non-numeric phase data blocks charging and returns any
+  GridShift-owned Fronius mode to `Auto`.
 - Multiple named Home Assistant homes with isolated entity mappings, plans, and
   thermostat scopes in the hosted dashboard.
 - Live hosted control of the integration's **Automatic battery control** and
@@ -264,6 +267,7 @@ Automatic control is off after installation. Before enabling it, verify:
 
 - the recommended power is zero when any phase has no safe headroom;
 - L1, L2, and L3 are mapped in the correct order;
+- the oldest-phase-sensor-age diagnostic remains below the configured limit;
 - house load does not double-count EV charging;
 - the price forecast covers the planning horizon;
 - state of charge and battery capacity are correct;

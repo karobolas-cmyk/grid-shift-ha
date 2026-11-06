@@ -1,0 +1,119 @@
+{
+  "title": "GridShift batterioptimering",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fronius batteristyrning",
+        "description": "Välj entiteter som skapats av callifo/fronius_modbus.",
+        "data": {
+          "soc_entity": "Batteriets laddnivå",
+          "control_mode_entity": "Lagringens styrläge",
+          "charge_power_entity": "Laddeffekt från elnätet",
+          "discharge_power_entity": "Urladdningseffekt till elnätet (valfri)"
+        }
+      },
+      "energy": {
+        "title": "Husets energidata",
+        "description": "Välj de tre fasströmmarna i ordningen L1, L2, L3. Fronius Smart Meter och Tibber Pulse stöds.",
+        "data": {
+          "price_entity": "Elpris",
+          "house_load_entity": "Husets förbrukning",
+          "ev_power_entities": "Elbilsladdarnas effekter (valfria)",
+          "solar_power_entities": "Solproduktionseffekter (valfria)",
+          "outdoor_temperature_entity": "Utetemperatur (valfri)",
+          "phase_current_entities": "Nätström L1, L2, L3"
+        }
+      },
+      "limits": {
+        "title": "Säkerhet och optimeringsgränser",
+        "description": "Styrningen startar avstängd. Granska rekommendationssensorerna innan brytaren aktiveras.",
+        "data": {
+          "battery_capacity_kwh": "Användbar batterikapacitet",
+          "min_soc_pct": "Lägsta laddnivå",
+          "max_target_soc_pct": "Högsta optimeringsmål",
+          "max_charge_power_w": "Högsta laddeffekt från nätet",
+          "max_discharge_power_w": "Högsta urladdningseffekt till nätet",
+          "main_fuse_a": "Huvudsäkring per fas",
+          "phase_safety_margin_a": "Säkerhetsmarginal per fas",
+          "phase_sensor_max_age_seconds": "Högsta ålder på fasvärden",
+          "nominal_voltage_v": "Nominell fasspänning",
+          "interval_minutes": "Planeringsintervall",
+          "horizon_hours": "Planeringshorisont",
+          "expensive_quantile": "Kvantilsgräns för dyra priser",
+          "min_savings_percent": "Lägsta bruttobesparing",
+          "round_trip_efficiency": "Tur- och returverkningsgrad",
+          "cycle_cost": "Cykelkostnad i pris-enhet/kWh",
+            "capacity_tariff_enabled": "Aktivera effekttariff",
+            "capacity_tariff_model": "Effekttariffens toppmodell",
+            "capacity_tariff_rate_per_kw": "Effektpris",
+            "capacity_tariff_reference_kw": "Referenstopp för aktuell fakturaperiod",
+            "capacity_tariff_start_hour": "Tariffintervallet börjar",
+            "capacity_tariff_end_hour": "Tariffintervallet slutar",
+          "house_load_includes_ev": "Husets förbrukning innehåller redan elbilsladdning",
+          "swedish_winter_mode": "Svensk vintermodell (15 nov–15 mar)",
+          "winter_solar_factor": "Tillgodoräknad vintersol",
+          "heating_balance_temp_c": "Balanstemperatur för värmereserv",
+          "heating_reserve_kw_per_c": "Värmereserv per grad",
+          "charge_mode_option": "Fronius-alternativ för nätladdning",
+          "discharge_mode_option": "Fronius-alternativ för näturladdning",
+          "auto_mode_option": "Fronius-alternativ för automatläge",
+          "mode_settle_seconds": "Väntetid efter byte av Fronius-läge"
+        }
+      }
+    },
+    "error": {
+      "entity_unavailable": "En eller flera valda entiteter är otillgängliga.",
+      "three_phases_required": "Välj exakt tre fasströmsentiteter.",
+      "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
+      "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
+      "required_control_modes_missing": "Den valda lagringsstyrningen saknar Auto, Charge from Grid eller det valfria läget Discharge to Grid."
+    },
+    "abort": {
+      "already_configured": "Det här Fronius-batteriet är redan konfigurerat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optimeringsgränser",
+        "data": {
+          "battery_capacity_kwh": "Användbar batterikapacitet",
+          "min_soc_pct": "Lägsta laddnivå",
+          "max_target_soc_pct": "Högsta optimeringsmål",
+          "max_charge_power_w": "Högsta laddeffekt från nätet",
+          "max_discharge_power_w": "Högsta urladdningseffekt till nätet",
+          "main_fuse_a": "Huvudsäkring per fas",
+          "phase_safety_margin_a": "Säkerhetsmarginal per fas",
+          "phase_sensor_max_age_seconds": "Högsta ålder på fasvärden",
+          "nominal_voltage_v": "Nominell fasspänning",
+          "interval_minutes": "Planeringsintervall",
+          "horizon_hours": "Planeringshorisont",
+          "expensive_quantile": "Kvantilsgräns för dyra priser",
+          "min_savings_percent": "Lägsta bruttobesparing",
+          "round_trip_efficiency": "Tur- och returverkningsgrad",
+          "cycle_cost": "Cykelkostnad i pris-enhet/kWh",
+            "capacity_tariff_enabled": "Aktivera effekttariff",
+            "capacity_tariff_model": "Effekttariffens toppmodell",
+            "capacity_tariff_rate_per_kw": "Effektpris",
+            "capacity_tariff_reference_kw": "Referenstopp för aktuell fakturaperiod",
+            "capacity_tariff_start_hour": "Tariffintervallet börjar",
+            "capacity_tariff_end_hour": "Tariffintervallet slutar",
+          "house_load_includes_ev": "Husets förbrukning innehåller redan elbilsladdning",
+          "swedish_winter_mode": "Svensk vintermodell (15 nov–15 mar)",
+          "winter_solar_factor": "Tillgodoräknad vintersol",
+          "heating_balance_temp_c": "Balanstemperatur för värmereserv",
+          "heating_reserve_kw_per_c": "Värmereserv per grad",
+          "charge_mode_option": "Fronius-alternativ för nätladdning",
+          "discharge_mode_option": "Fronius-alternativ för näturladdning",
+          "auto_mode_option": "Fronius-alternativ för automatläge",
+          "mode_settle_seconds": "Väntetid efter byte av Fronius-läge"
+        }
+      }
+    },
+    "error": {
+      "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
+      "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
+      "required_control_modes_missing": "Den valda lagringsstyrningen saknar något av de konfigurerade GridShift-lägena."
+    }
+  }
+}
