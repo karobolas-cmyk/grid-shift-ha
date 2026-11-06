@@ -42,8 +42,8 @@ from .const import (
     CONF_NOMINAL_VOLTAGE_V,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
-    CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_PHASE_SAFETY_MARGIN_A,
+    CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_PRICE_ENTITY,
     CONF_ROUND_TRIP_EFFICIENCY,
     CONF_SOC_ENTITY,
@@ -320,15 +320,16 @@ class GridShiftConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Configure physical and economic guardrails."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if error := _validate_limits(user_input):
-                errors["base"] = error
-            elif error := _validate_control_modes(
-                self.hass.states.get(self._data[CONF_CONTROL_MODE_ENTITY]),
-                user_input,
-                discharge_configured=bool(
-                    self._data.get(CONF_DISCHARGE_POWER_ENTITY)
-                ),
-            ):
+            error = _validate_limits(user_input)
+            if error is None:
+                error = _validate_control_modes(
+                    self.hass.states.get(self._data[CONF_CONTROL_MODE_ENTITY]),
+                    user_input,
+                    discharge_configured=bool(
+                        self._data.get(CONF_DISCHARGE_POWER_ENTITY)
+                    ),
+                )
+            if error:
                 errors["base"] = error
             else:
                 self._data.update(user_input)
@@ -354,17 +355,18 @@ class GridShiftOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            if error := _validate_limits(user_input):
-                errors["base"] = error
-            elif error := _validate_control_modes(
-                self.hass.states.get(
-                    self._entry.data[CONF_CONTROL_MODE_ENTITY]
-                ),
-                user_input,
-                discharge_configured=bool(
-                    self._entry.data.get(CONF_DISCHARGE_POWER_ENTITY)
-                ),
-            ):
+            error = _validate_limits(user_input)
+            if error is None:
+                error = _validate_control_modes(
+                    self.hass.states.get(
+                        self._entry.data[CONF_CONTROL_MODE_ENTITY]
+                    ),
+                    user_input,
+                    discharge_configured=bool(
+                        self._entry.data.get(CONF_DISCHARGE_POWER_ENTITY)
+                    ),
+                )
+            if error:
                 errors["base"] = error
             else:
                 return self.async_create_entry(title="", data=user_input)

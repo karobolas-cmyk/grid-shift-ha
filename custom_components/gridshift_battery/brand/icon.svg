@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="GridShift">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#55e6d1"/>
+      <stop offset="1" stop-color="#b8f34a"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="52" fill="#081a14"/>
+  <path d="M65 73h67v25H90v60h42v-18h-24v-24h51v67H65z" fill="url(#g)"/>
+  <path d="M175 73h24l-22 46h23l-48 67 13-48h-24z" fill="#b8f34a"/>
+</svg>
