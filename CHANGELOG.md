@@ -2,6 +2,11 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.7.1 - 2026-11-06
+
+- Completed HACS and Home Assistant manifest validation for the standalone
+  integration repository.
+
 ## 0.7.0 - 2026-11-06
 
 - Moved the Home Assistant integration to its own HACS repository:
