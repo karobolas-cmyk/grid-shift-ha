@@ -12,9 +12,19 @@
           "discharge_power_entity": "Urladdningseffekt till elnätet (valfri)"
         }
       },
+      "energy_sources": {
+        "title": "Energiintegrationer",
+        "description": "Välj vilken integration som äger respektive energidata. GridShift föreslår matchande entiteter på nästa sida; alla förslag kan ändras manuellt.",
+        "data": {
+          "price_provider": "Integration för elpris",
+          "meter_provider": "Integration för husmätare och fasströmmar",
+          "solar_provider": "Solcellsintegration",
+          "ev_provider": "Laddboxsintegration"
+        }
+      },
       "energy": {
         "title": "Husets energidata",
-        "description": "Välj de tre fasströmmarna i ordningen L1, L2, L3. Fronius Smart Meter och Tibber Pulse stöds.",
+        "description": "Granska de automatiskt hittade entiteterna. Behåll fasströmmarna i ordningen L1, L2, L3. Elpriset behöver innehålla en framtida prislista.",
         "data": {
           "price_entity": "Elpris",
           "house_load_entity": "Husets förbrukning",
@@ -66,6 +76,8 @@
       "three_phases_required": "Välj exakt tre fasströmsentiteter.",
       "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
       "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
+      "invalid_energy_selection": "Energimappningen kunde inte läsas. Granska valda entiteter och försök igen.",
+      "configuration_step_failed": "Nästa inställningssida kunde inte öppnas. Kontrollera Home Assistant-loggen för det detaljerade GridShift-felet.",
       "required_control_modes_missing": "Den valda lagringsstyrningen saknar Auto, Charge from Grid eller det valfria läget Discharge to Grid."
     },
     "abort": {

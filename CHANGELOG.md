@@ -2,6 +2,15 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.8.0 - 2026-11-06
+
+- Added an energy-integration step for price, meter/phases, solar, and EV data.
+- Added conservative entity discovery with suggested price, house-load, solar,
+  charger, outdoor-temperature, and ordered L1/L2/L3 entities.
+- Kept every discovered mapping editable before it is saved.
+- Normalized empty, single, and multiple selector values and replaced generic
+  Home Assistant flow failures with actionable translated errors plus log detail.
+
 ## 0.7.1 - 2026-11-06
 
 - Completed HACS and Home Assistant manifest validation for the standalone

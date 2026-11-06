@@ -12,9 +12,19 @@
           "discharge_power_entity": "Grid discharge power (optional)"
         }
       },
+      "energy_sources": {
+        "title": "Energy integrations",
+        "description": "Choose the integrations that own each type of energy data. GridShift will propose matching entities on the next page; every proposal can be changed manually.",
+        "data": {
+          "price_provider": "Electricity-price integration",
+          "meter_provider": "House meter and phase-current integration",
+          "solar_provider": "Solar integration",
+          "ev_provider": "EV charger integration"
+        }
+      },
       "energy": {
         "title": "Home energy inputs",
-        "description": "Choose all three phase currents in L1, L2, L3 order. Fronius Smart Meter and Tibber Pulse are supported.",
+        "description": "Review the auto-discovered entities. Keep phase currents in L1, L2, L3 order. The price entity needs a future price-list attribute.",
         "data": {
           "price_entity": "Electricity price",
           "house_load_entity": "House load",
@@ -66,6 +76,8 @@
       "three_phases_required": "Select exactly three phase-current entities.",
       "target_not_above_minimum": "The target state of charge must exceed the minimum.",
       "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
+      "invalid_energy_selection": "The energy mapping could not be read. Review the selected entities and try again.",
+      "configuration_step_failed": "The next settings page could not be opened. Check the Home Assistant log for the detailed GridShift error.",
       "required_control_modes_missing": "The selected storage-control entity does not expose Auto, Charge from Grid, and the configured optional Discharge to Grid mode."
     },
     "abort": {

@@ -151,8 +151,10 @@ export. The setup flow checks that the selected storage-control entity exposes
 the required mode names before it accepts the configuration.
 
 Then select electricity price, house load, and optional solar, EV, and outdoor
-temperature entities. Multiple solar and EV power entities can be selected and
-summed. This supports a second inverter exposed by Home Assistant's official
+temperature integrations. GridShift proposes matching entities from the Home
+Assistant entity registry, including L1/L2/L3 in order, and then asks for
+confirmation. Every suggestion has a manual override. Multiple solar and EV
+power entities can be selected and summed. This supports a second inverter exposed by Home Assistant's official
 local Fronius integration, a Sigenergy plant, and homes with more than one EV
 charger. Power sensors in W, kW, and MW are supported. Keep **House load
 already includes EV charging** enabled unless the load entity explicitly excludes

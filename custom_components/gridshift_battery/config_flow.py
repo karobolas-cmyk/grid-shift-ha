@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
@@ -24,6 +26,7 @@ from .const import (
     CONF_CYCLE_COST,
     CONF_DISCHARGE_MODE_OPTION,
     CONF_DISCHARGE_POWER_ENTITY,
+    CONF_EV_PROVIDER,
     CONF_EV_POWER_ENTITIES,
     CONF_EXPENSIVE_QUANTILE,
     CONF_HEATING_BALANCE_TEMP_C,
@@ -33,6 +36,7 @@ from .const import (
     CONF_HOUSE_LOAD_INCLUDES_EV,
     CONF_INTERVAL_MINUTES,
     CONF_MAIN_FUSE_A,
+    CONF_METER_PROVIDER,
     CONF_MAX_CHARGE_POWER_W,
     CONF_MAX_DISCHARGE_POWER_W,
     CONF_MAX_TARGET_SOC_PCT,
@@ -45,16 +49,63 @@ from .const import (
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_PRICE_ENTITY,
+    CONF_PRICE_PROVIDER,
     CONF_ROUND_TRIP_EFFICIENCY,
     CONF_SOC_ENTITY,
     CONF_SOLAR_POWER_ENTITIES,
+    CONF_SOLAR_PROVIDER,
     CONF_SWEDISH_WINTER_MODE,
     CONF_WINTER_SOLAR_FACTOR,
     DEFAULTS,
     DOMAIN,
     FRONIUS_DOMAIN,
 )
+from .discovery import EntityCandidate, discover_energy_entities
 from .fronius import missing_control_modes
+
+_LOGGER = logging.getLogger(__name__)
+
+PRICE_PROVIDERS = [
+    {"value": "auto", "label": "Auto-detect"},
+    {"value": "tibber", "label": "Tibber"},
+    {"value": "nordpool", "label": "Nord Pool"},
+    {"value": "manual", "label": "Manual / any integration"},
+]
+METER_PROVIDERS = [
+    {"value": "auto", "label": "Auto-detect"},
+    {"value": "fronius_modbus", "label": "Fronius Modbus"},
+    {"value": "tibber", "label": "Tibber Pulse"},
+    {"value": "sigenergy", "label": "Sigenergy"},
+    {"value": "manual", "label": "Manual / any integration"},
+]
+SOLAR_PROVIDERS = [
+    {"value": "auto", "label": "Auto-detect"},
+    {"value": "fronius_modbus", "label": "Fronius Modbus"},
+    {"value": "fronius", "label": "Fronius (official)"},
+    {"value": "sigenergy", "label": "Sigenergy"},
+    {"value": "solaredge", "label": "SolarEdge"},
+    {"value": "enphase_envoy", "label": "Enphase Envoy"},
+    {"value": "goodwe", "label": "GoodWe"},
+    {"value": "sma", "label": "SMA"},
+    {"value": "growatt", "label": "Growatt"},
+    {"value": "solax", "label": "SolaX"},
+    {"value": "victron", "label": "Victron"},
+    {"value": "sungrow", "label": "Sungrow"},
+    {"value": "manual", "label": "Manual / any integration"},
+]
+EV_PROVIDERS = [
+    {"value": "auto", "label": "Auto-detect"},
+    {"value": "chargeamps", "label": "Charge Amps"},
+    {"value": "easee", "label": "Easee"},
+    {"value": "zaptec", "label": "Zaptec"},
+    {"value": "sigenergy", "label": "Sigenergy"},
+    {"value": "wallbox", "label": "Wallbox"},
+    {"value": "tesla", "label": "Tesla Wall Connector"},
+    {"value": "goe", "label": "go-e"},
+    {"value": "myenergi", "label": "myenergi Zappi"},
+    {"value": "ocpp", "label": "OCPP"},
+    {"value": "manual", "label": "Manual / any integration"},
+]
 
 
 def _entity(domain: str, integration: str | None = None, multiple: bool = False):
@@ -78,6 +129,24 @@ def _number(
             min=minimum, max=maximum, step=step, unit_of_measurement=unit, mode=mode
         )
     )
+
+
+def _provider_selector(options: list[dict[str, str]]):
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _as_entity_list(value: Any) -> list[str]:
+    """Normalize Home Assistant's single and multiple selector values."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(entity_id) for entity_id in value if entity_id]
 
 
 def _limits_schema(values: dict[str, Any]) -> vol.Schema:
@@ -263,7 +332,7 @@ class GridShiftConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "entity_unavailable"
             else:
                 self._data.update(user_input)
-                return await self.async_step_energy()
+                return await self.async_step_energy_sources()
 
         return self.async_show_form(
             step_id="user",
@@ -280,35 +349,159 @@ class GridShiftConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_energy_sources(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Choose integrations before GridShift proposes entity mappings."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_energy()
+
+        return self.async_show_form(
+            step_id="energy_sources",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_PRICE_PROVIDER, default="auto"): (
+                        _provider_selector(PRICE_PROVIDERS)
+                    ),
+                    vol.Required(CONF_METER_PROVIDER, default="auto"): (
+                        _provider_selector(METER_PROVIDERS)
+                    ),
+                    vol.Required(CONF_SOLAR_PROVIDER, default="auto"): (
+                        _provider_selector(SOLAR_PROVIDERS)
+                    ),
+                    vol.Required(CONF_EV_PROVIDER, default="auto"): (
+                        _provider_selector(EV_PROVIDERS)
+                    ),
+                }
+            ),
+        )
+
+    def _energy_candidates(self) -> tuple[EntityCandidate, ...]:
+        """Read minimal discovery metadata from Home Assistant's entity registry."""
+        registry = er.async_get(self.hass)
+        candidates: list[EntityCandidate] = []
+        for state in self.hass.states.async_all():
+            if not state.entity_id.startswith("sensor."):
+                continue
+            entry = registry.async_get(state.entity_id)
+            if entry is not None and entry.disabled_by is not None:
+                continue
+            candidates.append(
+                EntityCandidate(
+                    entity_id=state.entity_id,
+                    integration=entry.platform if entry is not None else "",
+                    name=str(state.attributes.get("friendly_name", "")),
+                    device_class=str(state.attributes.get("device_class", "")),
+                    unit=str(state.attributes.get("unit_of_measurement", "")),
+                )
+            )
+        return tuple(candidates)
+
+    def _energy_suggestions(self) -> dict[str, str | list[str]]:
+        return discover_energy_entities(
+            self._energy_candidates(),
+            price_provider=self._data.get(CONF_PRICE_PROVIDER, "auto"),
+            meter_provider=self._data.get(CONF_METER_PROVIDER, "auto"),
+            solar_provider=self._data.get(CONF_SOLAR_PROVIDER, "auto"),
+            ev_provider=self._data.get(CONF_EV_PROVIDER, "auto"),
+        )
+
+    @staticmethod
+    def _suggested(
+        suggestions: dict[str, str | list[str]], key: str
+    ) -> dict[str, Any] | None:
+        value = suggestions.get(key)
+        return {"suggested_value": value} if value else None
+
     async def async_step_energy(self, user_input: dict[str, Any] | None = None):
-        """Select the price, load, production, EV, and phase entities."""
+        """Confirm discovered price, load, production, EV, and phase entities."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if len(user_input[CONF_PHASE_CURRENT_ENTITIES]) != 3:
-                errors["base"] = "three_phases_required"
-            elif any(
-                self.hass.states.get(entity_id) is None
-                for entity_id in user_input[CONF_PHASE_CURRENT_ENTITIES]
-            ):
-                errors["base"] = "entity_unavailable"
-            else:
-                self._data.update(user_input)
-                return await self.async_step_limits()
+            try:
+                phase_entities = _as_entity_list(
+                    user_input.get(CONF_PHASE_CURRENT_ENTITIES)
+                )
+                user_input[CONF_PHASE_CURRENT_ENTITIES] = phase_entities
+                for key in (CONF_EV_POWER_ENTITIES, CONF_SOLAR_POWER_ENTITIES):
+                    selected = _as_entity_list(user_input.get(key))
+                    if selected:
+                        user_input[key] = selected
+                    else:
+                        user_input.pop(key, None)
+
+                required = [
+                    user_input.get(CONF_PRICE_ENTITY),
+                    user_input.get(CONF_HOUSE_LOAD_ENTITY),
+                    *phase_entities,
+                ]
+                optional = [
+                    user_input.get(CONF_OUTDOOR_TEMPERATURE_ENTITY),
+                    *_as_entity_list(user_input.get(CONF_EV_POWER_ENTITIES)),
+                    *_as_entity_list(user_input.get(CONF_SOLAR_POWER_ENTITIES)),
+                ]
+                if len(phase_entities) != 3 or len(set(phase_entities)) != 3:
+                    errors["base"] = "three_phases_required"
+                elif any(not entity_id for entity_id in required) or any(
+                    self.hass.states.get(entity_id) is None
+                    for entity_id in (*required, *(item for item in optional if item))
+                ):
+                    errors["base"] = "entity_unavailable"
+                else:
+                    self._data.update(user_input)
+                    try:
+                        return await self.async_step_limits()
+                    except Exception:
+                        _LOGGER.exception("Could not open GridShift safety settings")
+                        errors["base"] = "configuration_step_failed"
+            except (KeyError, TypeError, ValueError):
+                _LOGGER.exception("Invalid GridShift energy entity selection")
+                errors["base"] = "invalid_energy_selection"
+
+        suggestions = self._energy_suggestions()
 
         return self.async_show_form(
             step_id="energy",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_PRICE_ENTITY): _entity("sensor"),
-                    vol.Required(CONF_HOUSE_LOAD_ENTITY): _entity("sensor"),
-                    vol.Optional(CONF_EV_POWER_ENTITIES): _entity(
+                    vol.Required(
+                        CONF_PRICE_ENTITY,
+                        description=self._suggested(suggestions, CONF_PRICE_ENTITY),
+                    ): _entity("sensor"),
+                    vol.Required(
+                        CONF_HOUSE_LOAD_ENTITY,
+                        description=self._suggested(
+                            suggestions, CONF_HOUSE_LOAD_ENTITY
+                        ),
+                    ): _entity("sensor"),
+                    vol.Optional(
+                        CONF_EV_POWER_ENTITIES,
+                        description=self._suggested(
+                            suggestions, CONF_EV_POWER_ENTITIES
+                        ),
+                    ): _entity(
                         "sensor", multiple=True
                     ),
-                    vol.Optional(CONF_SOLAR_POWER_ENTITIES): _entity(
+                    vol.Optional(
+                        CONF_SOLAR_POWER_ENTITIES,
+                        description=self._suggested(
+                            suggestions, CONF_SOLAR_POWER_ENTITIES
+                        ),
+                    ): _entity(
                         "sensor", multiple=True
                     ),
-                    vol.Optional(CONF_OUTDOOR_TEMPERATURE_ENTITY): _entity("sensor"),
-                    vol.Required(CONF_PHASE_CURRENT_ENTITIES): _entity(
+                    vol.Optional(
+                        CONF_OUTDOOR_TEMPERATURE_ENTITY,
+                        description=self._suggested(
+                            suggestions, CONF_OUTDOOR_TEMPERATURE_ENTITY
+                        ),
+                    ): _entity("sensor"),
+                    vol.Required(
+                        CONF_PHASE_CURRENT_ENTITIES,
+                        description=self._suggested(
+                            suggestions, CONF_PHASE_CURRENT_ENTITIES
+                        ),
+                    ): _entity(
                         "sensor", multiple=True
                     ),
                 }
