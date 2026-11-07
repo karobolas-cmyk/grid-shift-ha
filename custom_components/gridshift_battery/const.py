@@ -42,6 +42,7 @@ CONF_ROUND_TRIP_EFFICIENCY = "round_trip_efficiency"
 CONF_CYCLE_COST = "cycle_cost"
 CONF_CHARGE_MODE_OPTION = "charge_mode_option"
 CONF_DISCHARGE_MODE_OPTION = "discharge_mode_option"
+CONF_BLOCK_DISCHARGE_MODE_OPTION = "block_discharge_mode_option"
 CONF_AUTO_MODE_OPTION = "auto_mode_option"
 CONF_MODE_SETTLE_SECONDS = "mode_settle_seconds"
 CONF_SWEDISH_WINTER_MODE = "swedish_winter_mode"
@@ -74,6 +75,7 @@ DEFAULTS = {
     CONF_HOUSE_LOAD_INCLUDES_EV: True,
     CONF_CHARGE_MODE_OPTION: "Charge from Grid",
     CONF_DISCHARGE_MODE_OPTION: "Discharge to Grid",
+    CONF_BLOCK_DISCHARGE_MODE_OPTION: "Block Discharging",
     CONF_AUTO_MODE_OPTION: "Auto",
     CONF_MODE_SETTLE_SECONDS: 20,
     CONF_SWEDISH_WINTER_MODE: True,
