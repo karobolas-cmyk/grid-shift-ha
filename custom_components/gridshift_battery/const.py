@@ -21,6 +21,9 @@ CONF_PRICE_PROVIDER = "price_provider"
 CONF_METER_PROVIDER = "meter_provider"
 CONF_SOLAR_PROVIDER = "solar_provider"
 CONF_EV_PROVIDER = "ev_provider"
+CONF_SOLAR_PEAK_POWER_KWP = "solar_peak_power_kwp"
+CONF_LATITUDE = "latitude"
+CONF_LONGITUDE = "longitude"
 
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_MIN_SOC_PCT = "min_soc_pct"
@@ -83,6 +86,7 @@ DEFAULTS = {
     CONF_CAPACITY_TARIFF_REFERENCE_KW: 8.0,
     CONF_CAPACITY_TARIFF_START_HOUR: 6,
     CONF_CAPACITY_TARIFF_END_HOUR: 22,
+    CONF_SOLAR_PEAK_POWER_KWP: 0.0,
 }
 
 FRONIUS_DOMAIN = "fronius_modbus"
