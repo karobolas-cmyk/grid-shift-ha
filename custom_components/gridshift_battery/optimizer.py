@@ -175,27 +175,49 @@ def _optimize_once(data: OptimizerInput) -> Decision:
         return Decision("blocked", 0, "invalid_state_of_charge")
 
     prices = [slot.price for slot in future]
-    tariff_costs = {slot: _capacity_tariff_cost(data, slot) for slot in future}
+    tariff_costs = {
+        slot: _capacity_tariff_cost(data, slot, phase_limit_w) for slot in future
+    }
     effective_prices = {
         slot: slot.price + tariff_costs[slot][4] for slot in future
     }
     expensive_cutoff = _quantile(prices, data.expensive_quantile)
     cheap_cutoff = _quantile(prices, 1 - data.expensive_quantile)
     expensive = [slot for slot in future if slot.price >= expensive_cutoff]
-    expensive_load_kwh = sum(
-        _forecast_for_slot(data, slot) * _remaining_hours(data, slot) / 1000
-        for slot in expensive
-    )
+    # The reserve must cover demand until the next cheap recharge opportunity,
+    # including the moderately priced intervals between and after price peaks.
+    reserve_start = next((slot.start for slot in expensive), active.start)
+    reserve_end = future[-1].end
+    protected = [slot for slot in future if slot.start >= reserve_start]
+    expensive_load_kwh = 0.0
     heating_reserve_kwh = 0.0
+    reserve_kw = 0.0
     if data.winter_active and data.outdoor_temperature_c is not None:
         reserve_kw = max(
             0.0,
             data.heating_balance_temp_c - data.outdoor_temperature_c,
         ) * data.heating_reserve_kw_per_c
-        heating_reserve_kwh = reserve_kw * sum(
-            _remaining_hours(data, slot) for slot in expensive
+    # Work backwards through the demand. A short cheap window only offsets the
+    # energy it can physically deliver; it cannot erase the next price peak's
+    # entire reserve requirement merely because its price is low.
+    recharge_reference = expensive_cutoff * data.round_trip_efficiency - data.cycle_cost
+    for slot in reversed(protected):
+        hours = _remaining_hours(data, slot)
+        can_recharge = (
+            slot.price <= cheap_cutoff and slot.price < expensive_cutoff
+            and recharge_reference - effective_prices[slot]
+            >= max(0.01, abs(slot.price)) * data.min_savings_percent / 100
+            and data.plan_overrides.get(slot.start.isoformat()) != "idle"
         )
-        expensive_load_kwh += heating_reserve_kwh
+        if can_recharge:
+            capacity = phase_limit_w * hours * data.round_trip_efficiency / 1000
+            expensive_load_kwh = max(0.0, expensive_load_kwh - capacity)
+            if expensive_load_kwh <= 0.001:
+                reserve_end = slot.start
+            continue
+        expensive_load_kwh += _forecast_for_slot(data, slot) * hours / 1000
+        expensive_load_kwh += reserve_kw * hours
+        heating_reserve_kwh += reserve_kw * hours
 
     usable_capacity_kwh = data.battery_capacity_kwh * max(
         0.0, data.max_target_soc_pct - data.min_soc_pct
@@ -244,6 +266,8 @@ def _optimize_once(data: OptimizerInput) -> Decision:
         "capacity_tariff_projected_kw": round(active_tariff[1], 3),
         "capacity_tariff_incremental_peak_kw": round(active_tariff[2], 3),
         "capacity_tariff_estimated_fee": round(active_tariff[3], 2),
+        "reserve_start": reserve_start.isoformat(),
+        "reserve_end": reserve_end.isoformat(),
     }
 
     later_expensive = tuple(
@@ -346,7 +370,12 @@ def _optimize_once(data: OptimizerInput) -> Decision:
         if remaining <= 0:
             break
         hours = _remaining_hours(data, slot)
-        slot_capacity = data.max_charge_power_w * hours / 1000
+        if data.plan_overrides.get(slot.start.isoformat()) == "idle":
+            continue
+        # A nominal 10 kW inverter must not be booked at 10 kW when the limiting
+        # phase currently only permits 2 kW. This is a conservative forecast;
+        # actual phase measurements are rechecked before every physical write.
+        slot_capacity = phase_limit_w * hours / 1000
         energy = min(remaining, slot_capacity)
         power = int(energy * 1000 / max(hours, 0.001))
         selected.append((slot, power))
@@ -409,6 +438,7 @@ def optimize(data: OptimizerInput) -> Decision:
             soc += decision.charge_power_w * hours * data.round_trip_efficiency / (
                 10 * data.battery_capacity_kwh
             )
+            soc = min(data.max_target_soc_pct, soc)
         elif decision.action == "discharge":
             soc -= decision.discharge_power_w * hours / (10 * data.battery_capacity_kwh)
         elif decision.action == "idle":
@@ -431,7 +461,43 @@ def optimize(data: OptimizerInput) -> Decision:
             "forecast_house_w": forecast.house_w if forecast else 0,
             "forecast_ev_w": forecast.ev_w if forecast else 0,
             "forecast_solar_w": forecast.solar_w * solar_factor if forecast else 0,
+            "grid_charge_energy_kwh": round(
+                max(0, soc - before) * data.battery_capacity_kwh / (
+                    100 * data.round_trip_efficiency
+                ) if decision.action == "charge" else 0.0, 4,
+            ),
+            "target_soc_pct": decision.adaptive_target_soc_pct,
         })
+    sessions = []
+    session = None
+    for row in rows:
+        if row["action"] != "charge":
+            session = None
+            continue
+        start = max(data.now, datetime.fromisoformat(row["start"]))
+        if session is None:
+            session = {
+                "start": start.isoformat(), "end": row["end"],
+                "minutes": 0.0, "grid_energy_kwh": 0.0,
+                "start_soc_pct": row["projected_soc_start_pct"],
+                "end_soc_pct": row["projected_soc_end_pct"],
+            }
+            sessions.append(session)
+        session["end"] = row["end"]
+        session["minutes"] += (
+            datetime.fromisoformat(row["end"]) - start
+        ).total_seconds() / 60
+        session["grid_energy_kwh"] = round(
+            session["grid_energy_kwh"] + row["grid_charge_energy_kwh"], 4
+        )
+        session["end_soc_pct"] = row["projected_soc_end_pct"]
+    reserve_soc = next((
+        row["projected_soc_start_pct"] for row in rows
+        if row["start"] == automatic.reserve_start
+    ), data.soc_pct)
+    target_shortfall = data.battery_capacity_kwh * max(
+        0.0, (automatic.adaptive_target_soc_pct or data.soc_pct) - reserve_soc
+    ) / 100
     plan = {
         "generated_at": data.now.isoformat(), "actual_soc_pct": data.soc_pct,
         "battery_capacity_kwh": data.battery_capacity_kwh,
@@ -441,6 +507,15 @@ def optimize(data: OptimizerInput) -> Decision:
             data.battery_capacity_kwh * max(0, data.soc_pct - data.min_soc_pct) / 100, 3
         ),
         "reserve_required_kwh": automatic.forecast_expensive_load_kwh,
+        "reserve_start": automatic.reserve_start,
+        "reserve_end": automatic.reserve_end,
+        "projected_reserve_soc_pct": reserve_soc,
+        "unmet_target_kwh": round(target_shortfall, 3),
+        "planning_charge_power_w": automatic.phase_limit_w // 10 * 10,
+        "required_charge_minutes": round(
+            automatic.energy_needed_kwh * 60000 / (automatic.phase_limit_w // 10 * 10), 1
+        ) if automatic.phase_limit_w >= 100 else None,
+        "charge_sessions": sessions,
         "reserve_shortfall_kwh": round(max(
             0.0, automatic.forecast_expensive_load_kwh
             - data.battery_capacity_kwh * max(0, data.soc_pct - data.min_soc_pct) / 100,

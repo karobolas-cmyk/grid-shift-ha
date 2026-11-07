@@ -189,6 +189,29 @@ The bridge derives household demand as grid import minus export plus solar minus
 net battery charging. Measurement sensors must report W, kW or MW and be fresh.
 `number.*_grid_charge_power` is a requested setpoint, not a measurement.
 
+Fronius SolarNet's signed `power_battery` uses **negative for charging** and
+**positive for discharging**. GridShift detects this convention automatically.
+In the connection settings, **Invert battery power** provides a per-home manual
+override. The bridge stores `battery_power_direction` as `auto`,
+`positive_charging` or `positive_discharging`. This applies to the signed net
+sensor; separate charge/discharge sensors remain positive measurements.
+`house_load_source` (`auto`, `house`, `grid`) and `house_load_direction` (`auto`,
+`positive_consumption`, `negative_consumption`) provide equivalent overrides for
+the house input. Save the configuration to apply the same interpretation in HA.
+Changing these sources resets the learned consumption profile to avoid retaining
+misclassified battery charging as household demand.
+
+Charging-session summaries show minutes, expected grid kWh and projected start
+and end SoC. For example, a 26 kWh battery charging from 15% to 85% needs about
+20.7 kWh from the grid at 88% efficiency: over two hours at 10 kW. The plan uses
+the current estimated balanced phase capacity for future allocation and reports
+unmet energy when the target cannot be reached before the protected period.
+Future phase availability is an estimate; the live guard rechecks every write.
+With measured battery power available, existing charging in the phase budget is
+bounded by measured power after solar rather than the remembered setpoint. Old
+mappings without battery measurements retain the previous estimate; map measured
+battery power for the improved check.
+
 The action sensor includes a rolling `plan` with its generation time, actual SoC,
 stored usable energy, reserve shortfall and projected SoC for each remaining
 interval. Input changes and quarter boundaries rebuild this plan from actual SoC.

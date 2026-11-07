@@ -18,6 +18,7 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CHARGE_SENSOR,
     CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_DIRECTION,
     CONF_BATTERY_POWER_ENTITY,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
@@ -33,9 +34,11 @@ from .const import (
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
+    CONF_HOUSE_LOAD_DIRECTION,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
     CONF_HOUSE_LOAD_IS_GRID_POWER,
+    CONF_HOUSE_LOAD_SOURCE,
     CONF_INTERVAL_MINUTES,
     CONF_MAIN_FUSE_A,
     CONF_MAX_CHARGE_POWER_W,
@@ -51,6 +54,7 @@ from .const import (
     CONF_PRICE_ENTITY,
     CONF_ROUND_TRIP_EFFICIENCY,
     CONF_SOC_ENTITY,
+    CONF_SOLAR_PEAK_POWER_KWP,
     CONF_SOLAR_POWER_ENTITIES,
     CONF_SOLAR_POWER_ENTITY,
     CONF_SWEDISH_WINTER_MODE,
@@ -61,6 +65,14 @@ from .const import (
 from .controller import BatteryController, LiveSafetyError, PowerReadbackError, RuntimeStorage
 from .models import Decision, OptimizerInput
 from .optimizer import optimize
+from .power import (
+    battery_power_inverted,
+    grid_power_is_net,
+    house_from_grid_w,
+    house_input_is_grid,
+    house_power_inverted,
+    observed_grid_charge_w,
+)
 from .price import parse_price_slots
 from .safety import sensor_age_seconds, stale_sensor_ids
 
@@ -122,7 +134,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             )
             safe_w = max(
                 0.0,
-                self.controller.last_power_w
+                self._previous_grid_charge_w(dt_util.now())
                 + headroom * self.config[CONF_NOMINAL_VOLTAGE_V] * 3,
             )
             command = min(requested_w, int(safe_w))
@@ -185,6 +197,46 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         state = self.hass.states.get(entity_id)
         unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT) if state else None
         return value / 1000 if unit == "mA" else value
+
+    def _battery_power_w(self, now) -> float:
+        """Return measured battery power, positive for charging."""
+        net_entity = self.config.get(CONF_BATTERY_POWER_ENTITY)
+        if net_entity:
+            value = self._measured_power_w(net_entity, now)
+            state = self.hass.states.get(net_entity)
+            inverted = battery_power_inverted(
+                net_entity, state.attributes.get("friendly_name", ""),
+                self.config[CONF_BATTERY_POWER_DIRECTION],
+            )
+            return -value if inverted else value
+        charge = self.config.get(CONF_BATTERY_CHARGE_SENSOR)
+        discharge = self.config.get(CONF_BATTERY_DISCHARGE_SENSOR)
+        if charge and discharge:
+            return self._measured_power_w(charge, now) - self._measured_power_w(discharge, now)
+        raise UpdateFailed("Measured battery power is required to derive house load")
+
+    def _previous_grid_charge_w(self, now) -> int:
+        """Do not add an undelivered command to the available phase headroom."""
+        confirmed = self.controller.last_power_w
+        if confirmed <= 0:
+            return 0
+        if not self.config.get(CONF_BATTERY_POWER_ENTITY) and not (
+            self.config.get(CONF_BATTERY_CHARGE_SENSOR)
+            and self.config.get(CONF_BATTERY_DISCHARGE_SENSOR)
+        ):
+            return confirmed  # Legacy mappings do not expose measured battery power.
+        solar_ids = self.config.get(CONF_SOLAR_POWER_ENTITIES) or self.config.get(
+            CONF_SOLAR_POWER_ENTITY
+        ) or []
+        if not solar_ids and self.config.get(CONF_SOLAR_PEAK_POWER_KWP, 0) > 0:
+            return 0
+        if isinstance(solar_ids, str):
+            solar_ids = [solar_ids]
+        try:
+            solar_w = sum(self._measured_power_w(entity_id, now) for entity_id in solar_ids)
+            return observed_grid_charge_w(confirmed, self._battery_power_w(now), solar_w)
+        except UpdateFailed:
+            return 0
 
     def _phase_currents(
         self, now
@@ -285,31 +337,33 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             slots = await self._async_tibber_price_slots(now, horizon_end)
         slots = tuple(slot for slot in slots if slot.end > now and slot.start < horizon_end)
 
-        house_w = self._power_w(self.config[CONF_HOUSE_LOAD_ENTITY])
+        house_id = self.config[CONF_HOUSE_LOAD_ENTITY]
+        house_state = self.hass.states.get(house_id)
+        house_is_grid = house_input_is_grid(
+            house_id, house_state.attributes.get("friendly_name", "") if house_state else "",
+            self.config[CONF_HOUSE_LOAD_SOURCE],
+            self.config.get(CONF_HOUSE_LOAD_IS_GRID_POWER, False),
+        )
+        house_inverted = house_power_inverted(house_id, self.config[CONF_HOUSE_LOAD_DIRECTION])
+        house_sign = -1 if house_inverted else 1
+        house_w = self._power_w(house_id) * house_sign
         solar_entities = self.config.get(CONF_SOLAR_POWER_ENTITIES) or self.config.get(
             CONF_SOLAR_POWER_ENTITY
         )
         solar_w = self._sum_power_w(solar_entities)
-        if self.config.get(CONF_HOUSE_LOAD_IS_GRID_POWER):
-            house_w = self._measured_power_w(self.config[CONF_HOUSE_LOAD_ENTITY], now)
+        if house_is_grid:
+            house_w = self._measured_power_w(house_id, now) * house_sign
             solar_ids = (
                 [solar_entities] if isinstance(solar_entities, str) else solar_entities or []
             )
             solar_w = sum(self._measured_power_w(entity_id, now) for entity_id in solar_ids)
-            net_entity = self.config.get(CONF_BATTERY_POWER_ENTITY)
-            if net_entity:
-                battery_w = self._measured_power_w(net_entity, now)
-            elif self.config.get(CONF_BATTERY_CHARGE_SENSOR) and self.config.get(
-                CONF_BATTERY_DISCHARGE_SENSOR
-            ):
-                battery_w = self._measured_power_w(self.config[CONF_BATTERY_CHARGE_SENSOR], now) - (
-                    self._measured_power_w(self.config[CONF_BATTERY_DISCHARGE_SENSOR], now)
-                )
-            else:
-                raise UpdateFailed("Measured battery power is required to derive house load")
+            battery_w = self._battery_power_w(now)
             export_entity = self.config.get(CONF_GRID_EXPORT_SENSOR)
-            export_w = self._measured_power_w(export_entity, now) if export_entity else 0.0
-            house_w = max(0.0, house_w - export_w + solar_w - battery_w)
+            export_w = (
+                self._measured_power_w(export_entity, now)
+                if export_entity and not grid_power_is_net(house_id) else 0.0
+            )
+            house_w = house_from_grid_w(house_w, solar_w, battery_w, export_w)
         ev_entities = self.config.get(CONF_EV_POWER_ENTITIES) or self.config.get(
             CONF_EV_POWER_ENTITY
         )
@@ -317,6 +371,13 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         total_house_w = (
             house_w if self.config[CONF_HOUSE_LOAD_INCLUDES_EV] else house_w + ev_w
         )
+        self.power_sources = {
+            "house_entity": house_id, "house_is_grid": house_is_grid,
+            "house_inverted": house_inverted, "house_consumption_w": round(total_house_w, 1),
+            "battery_net_entity": self.config.get(CONF_BATTERY_POWER_ENTITY),
+            "battery_direction": self.config[CONF_BATTERY_POWER_DIRECTION],
+            "observed_grid_charge_w": self._previous_grid_charge_w(now),
+        }
         self.storage.model.observe(now, total_house_w, solar_w, ev_w)
         forecasts = self.storage.model.forecast(slots)
 
@@ -345,7 +406,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 expensive_quantile=self.config[CONF_EXPENSIVE_QUANTILE],
                 min_savings_percent=self.config[CONF_MIN_SAVINGS_PERCENT],
                 cycle_cost=self.config[CONF_CYCLE_COST],
-                previous_charge_power_w=self.controller.last_power_w,
+                previous_charge_power_w=self._previous_grid_charge_w(now),
                 discharge_enabled=self.controller.discharge_enabled,
                 force_action=force_action or plan_action,
                 plan_overrides=self.controller.plan_overrides,

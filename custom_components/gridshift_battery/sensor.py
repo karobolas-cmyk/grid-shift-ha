@@ -206,5 +206,6 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "energy_needed_kwh": data.energy_needed_kwh,
             "phase_limit_w": data.phase_limit_w,
             "phase_headroom_a": data.phase_headroom_a,
+            "power_sources": getattr(self.coordinator, "power_sources", {}),
         }
 

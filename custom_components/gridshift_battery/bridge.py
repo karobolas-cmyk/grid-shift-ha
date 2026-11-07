@@ -13,6 +13,7 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CHARGE_SENSOR,
     CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_DIRECTION,
     CONF_BATTERY_POWER_ENTITY,
     CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_ENABLED,
@@ -33,9 +34,11 @@ from .const import (
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
+    CONF_HOUSE_LOAD_DIRECTION,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
     CONF_HOUSE_LOAD_IS_GRID_POWER,
+    CONF_HOUSE_LOAD_SOURCE,
     CONF_INTERVAL_MINUTES,
     CONF_LATITUDE,
     CONF_LONGITUDE,
@@ -60,6 +63,7 @@ from .const import (
     CONF_WINTER_SOLAR_FACTOR,
 )
 from .fronius import missing_control_modes
+from .power import house_input_is_grid
 
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 ATTR_CONFIGURATION = "configuration"
@@ -91,6 +95,9 @@ REQUIRED_FIELDS = {
     CONF_CHARGE_POWER_ENTITY,
 }
 SETTING_FIELDS = {
+    CONF_BATTERY_POWER_DIRECTION,
+    CONF_HOUSE_LOAD_SOURCE,
+    CONF_HOUSE_LOAD_DIRECTION,
     CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
@@ -135,6 +142,9 @@ BOOLEAN_FIELDS = {
     CONF_SWEDISH_WINTER_MODE,
 }
 STRING_FIELDS = {
+    CONF_BATTERY_POWER_DIRECTION,
+    CONF_HOUSE_LOAD_SOURCE,
+    CONF_HOUSE_LOAD_DIRECTION,
     CONF_AUTO_MODE_OPTION,
     CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_MODEL,
@@ -248,7 +258,13 @@ def validate_configuration(
         state = hass.states.get(result[field])
         if state.attributes.get("unit_of_measurement") not in {"W", "kW", "MW"}:
             raise HomeAssistantError(f"{field} must measure power in W, kW, or MW")
-    if result.get(CONF_HOUSE_LOAD_IS_GRID_POWER) and not (
+    house_state = hass.states.get(result[CONF_HOUSE_LOAD_ENTITY])
+    house_is_grid = house_input_is_grid(
+        result[CONF_HOUSE_LOAD_ENTITY], house_state.attributes.get("friendly_name", ""),
+        result.get(CONF_HOUSE_LOAD_SOURCE, "auto"),
+        result.get(CONF_HOUSE_LOAD_IS_GRID_POWER, False),
+    )
+    if house_is_grid and not (
         result.get(CONF_BATTERY_POWER_ENTITY)
         or (result.get(CONF_BATTERY_CHARGE_SENSOR) and result.get(CONF_BATTERY_DISCHARGE_SENSOR))
     ):
@@ -259,6 +275,14 @@ def validate_configuration(
     for field in STRING_FIELDS & set(result):
         if not isinstance(result[field], str) or not result[field] or len(result[field]) > 64:
             raise HomeAssistantError(f"{field} must be a short non-empty string")
+    choices = {
+        CONF_BATTERY_POWER_DIRECTION: {"auto", "positive_charging", "positive_discharging"},
+        CONF_HOUSE_LOAD_DIRECTION: {"auto", "positive_consumption", "negative_consumption"},
+        CONF_HOUSE_LOAD_SOURCE: {"auto", "house", "grid"},
+    }
+    for field, options in choices.items():
+        if field in result and result[field] not in options:
+            raise HomeAssistantError(f"unsupported {field}")
     if (
         CONF_CAPACITY_TARIFF_MODEL in result
         and result[CONF_CAPACITY_TARIFF_MODEL]

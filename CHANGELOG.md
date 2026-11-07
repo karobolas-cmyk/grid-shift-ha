@@ -2,6 +2,24 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.7 - 2026-11-07
+
+- Normalize Fronius SolarNet battery power: negative means charging, positive
+  means discharging. Add explicit per-home polarity overrides in the bridge.
+- Recognize a grid meter selected as the house input, normalize Fronius raw
+  house consumption, and avoid subtracting export twice from signed grid power.
+- Relearn household consumption after measurement mappings or conventions
+  change, so battery charging is not retained as historical household demand.
+- Budget future charging with estimated phase capacity, rather than assuming
+  the inverter's nominal maximum is always available.
+- When battery measurements are mapped, bound existing grid charging by actual
+  battery power after solar, so an undelivered setpoint does not add phase capacity.
+- Reserve energy for demand through the next cheap recharge opportunity,
+  including moderately priced intervals between expensive peaks.
+- Expose charging sessions with duration, grid energy and projected SoC, plus
+  required charge time and a warning when phase limits prevent reaching target.
+- Preserve existing phase guards, explicit export opt-in, and latched failures.
+
 ## 0.12.6 - 2026-11-07
 
 - Rebuild the remaining plan from measured SoC on input updates and at quarter
