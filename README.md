@@ -16,7 +16,7 @@ entities. Connect the Home Assistant home in GridShift afterward; discovery,
 review, and entity mapping happen there.
 
 If Home Assistant still shows the old Fronius entity selectors, update the HACS
-integration to version 0.9.0 or later and restart Home Assistant before adding
+integration to version 0.9.1 or later and restart Home Assistant before adding
 the integration again.
 
 The Home Assistant setup screen for a new bridge contains only a confirmation
