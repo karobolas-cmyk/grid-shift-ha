@@ -109,6 +109,57 @@ def optimize(data: OptimizerInput) -> Decision:
     """
     future = tuple(slot for slot in data.price_slots if slot.end > data.now)
     active = current_slot(future, data.now)
+    headroom, phase_limit_w = _phase_limit(data)
+    force_base = {
+        "current_price": active.price if active is not None else None,
+        "phase_headroom_a": headroom,
+        "phase_limit_w": phase_limit_w,
+        "winter_active": data.winter_active,
+        "capacity_tariff_enabled": data.capacity_tariff_enabled,
+        "capacity_tariff_reference_kw": data.capacity_tariff_reference_kw,
+    }
+
+    # Manual actions are explicit real-time commands. They remain constrained by
+    # SoC, phase capacity, discharge opt-in, and the controller safety sequence,
+    # but must not depend on an automatic price forecast being available.
+    if data.force_action == "idle":
+        return Decision("idle", 0, "manual_force_idle", **force_base)
+    if not 0 <= data.soc_pct <= 100:
+        return Decision("blocked", 0, "invalid_state_of_charge", **force_base)
+    if data.force_action == "charge":
+        if data.soc_pct >= data.max_target_soc_pct:
+            return Decision(
+                "blocked", 0, "manual_force_charge_soc_limit", **force_base
+            )
+        command = min(data.max_charge_power_w, phase_limit_w) // 10 * 10
+        if command < 100:
+            return Decision("blocked", 0, "phase_capacity_exhausted", **force_base)
+        return Decision("charge", command, "manual_force_charge", **force_base)
+    if data.force_action == "discharge":
+        if not data.discharge_enabled:
+            return Decision(
+                "blocked", 0, "grid_discharge_not_enabled", **force_base
+            )
+        discharge_energy_kwh = data.battery_capacity_kwh * max(
+            0.0, data.soc_pct - data.min_soc_pct
+        ) / 100
+        duration_hours = active.duration_hours if active is not None else 0.25
+        energy_limit_w = int(
+            discharge_energy_kwh * 1000 / max(duration_hours, 0.001)
+        )
+        command = min(_balanced_discharge_limit(data), energy_limit_w) // 10 * 10
+        if command < 100:
+            return Decision(
+                "blocked", 0, "manual_force_discharge_soc_limit", **force_base
+            )
+        return Decision(
+            "discharge",
+            0,
+            "manual_force_discharge",
+            discharge_power_w=command,
+            **force_base,
+        )
+
     if active is None or len(future) < 2:
         return Decision("blocked", 0, "price_forecast_unavailable")
     if not 0 <= data.soc_pct <= 100:
@@ -159,7 +210,6 @@ def optimize(data: OptimizerInput) -> Decision:
     active_effective_price = effective_prices[active]
     minimum_gain = active.price * data.min_savings_percent / 100
 
-    headroom, phase_limit_w = _phase_limit(data)
     percentile = sum(price <= active.price for price in prices) / len(prices) * 100
 
     base = {
@@ -227,37 +277,6 @@ def optimize(data: OptimizerInput) -> Decision:
                 **base,
             )
         return Decision("idle", 0, reason, selected_slots=selected_slots, **base)
-
-    if data.force_action == "idle":
-        return Decision("idle", 0, "manual_force_idle", **base)
-    if data.force_action == "charge":
-        if data.soc_pct >= data.max_target_soc_pct:
-            return Decision("blocked", 0, "manual_force_charge_soc_limit", **base)
-        command = min(data.max_charge_power_w, phase_limit_w) // 10 * 10
-        if command < 100:
-            return Decision("blocked", 0, "phase_capacity_exhausted", **base)
-        return Decision("charge", command, "manual_force_charge", **base)
-    if data.force_action == "discharge":
-        if not data.discharge_enabled:
-            return Decision("blocked", 0, "grid_discharge_not_enabled", **base)
-        discharge_energy_kwh = data.battery_capacity_kwh * max(
-            0.0, data.soc_pct - data.min_soc_pct
-        ) / 100
-        energy_limit_w = int(
-            discharge_energy_kwh * 1000 / max(active.duration_hours, 0.001)
-        )
-        command = min(_balanced_discharge_limit(data), energy_limit_w) // 10 * 10
-        if command < 100:
-            return Decision(
-                "blocked", 0, "manual_force_discharge_soc_limit", **base
-            )
-        return Decision(
-            "discharge",
-            0,
-            "manual_force_discharge",
-            discharge_power_w=command,
-            **base,
-        )
 
     discharge_reserve_soc = max(data.min_soc_pct, adaptive_target)
     discharge_energy_kwh = data.battery_capacity_kwh * max(
