@@ -15,6 +15,10 @@ Home Assistant creates a local bridge and does **not** ask you to select
 entities. Connect the Home Assistant home in GridShift afterward; discovery,
 review, and entity mapping happen there.
 
+If Home Assistant still shows the old Fronius entity selectors, update the HACS
+integration to version 0.9.0 or later and restart Home Assistant before adding
+the integration again.
+
 The battery control path is native to
 [`callifo/fronius_modbus`](https://github.com/callifo/fronius_modbus). GridShift
 uses its `Storage Control Mode`, `Grid Charge Power`, and optional
