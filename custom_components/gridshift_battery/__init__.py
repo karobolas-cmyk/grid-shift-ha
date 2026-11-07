@@ -8,8 +8,9 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 
 from .bridge import (
@@ -18,6 +19,7 @@ from .bridge import (
     validate_configuration,
 )
 from .const import (
+    CONF_PHASE_CURRENT_ENTITIES,
     DOMAIN,
     SERVICE_CLEAR_FORCE_ACTION,
     SERVICE_FORCE_ACTION,
@@ -134,6 +136,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GridShiftCoordinator(hass, entry, storage, controller)
     runtime = GridShiftRuntime(coordinator, controller, storage, True)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+
+    @callback
+    def async_phase_sensor_changed(event: Event) -> None:
+        """Re-evaluate immediately when stale or loaded phase data changes."""
+        hass.async_create_task(coordinator.async_request_refresh())
+
+    entry.async_on_unload(
+        async_track_state_change_event(
+            hass,
+            controller.config[CONF_PHASE_CURRENT_ENTITIES],
+            async_phase_sensor_changed,
+        )
+    )
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
