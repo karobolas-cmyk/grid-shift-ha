@@ -2,7 +2,7 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
-## 0.9.0 - 2026-11-07
+## 0.9.1 - 2026-11-07
 
 - Replaced the entity-heavy Home Assistant setup wizard with a zero-input
   GridShift Bridge setup.
