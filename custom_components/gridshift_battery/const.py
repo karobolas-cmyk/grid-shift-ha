@@ -90,3 +90,19 @@ STORAGE_VERSION = 1
 STORAGE_KEY_PREFIX = f"{DOMAIN}."
 
 PLATFORMS = ["sensor", "switch"]
+
+REQUIRED_CONFIGURATION_KEYS = frozenset(
+    {
+        CONF_PRICE_ENTITY,
+        CONF_SOC_ENTITY,
+        CONF_HOUSE_LOAD_ENTITY,
+        CONF_PHASE_CURRENT_ENTITIES,
+        CONF_CONTROL_MODE_ENTITY,
+        CONF_CHARGE_POWER_ENTITY,
+    }
+)
+
+
+def is_configured(data: dict) -> bool:
+    """Return whether an entry contains the minimum runnable mapping."""
+    return REQUIRED_CONFIGURATION_KEYS.issubset(data)

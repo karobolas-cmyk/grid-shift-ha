@@ -21,7 +21,6 @@ from .const import (
     CONF_CAPACITY_TARIFF_REFERENCE_KW,
     CONF_CAPACITY_TARIFF_START_HOUR,
     CONF_CHARGE_MODE_OPTION,
-    CONF_CHARGE_POWER_ENTITY,
     CONF_CONTROL_MODE_ENTITY,
     CONF_CYCLE_COST,
     CONF_DISCHARGE_MODE_OPTION,
@@ -51,14 +50,12 @@ from .const import (
     CONF_PRICE_ENTITY,
     CONF_PRICE_PROVIDER,
     CONF_ROUND_TRIP_EFFICIENCY,
-    CONF_SOC_ENTITY,
     CONF_SOLAR_POWER_ENTITIES,
     CONF_SOLAR_PROVIDER,
     CONF_SWEDISH_WINTER_MODE,
     CONF_WINTER_SOLAR_FACTOR,
     DEFAULTS,
     DOMAIN,
-    FRONIUS_DOMAIN,
 )
 from .discovery import EntityCandidate, discover_energy_entities
 from .fronius import missing_control_modes
@@ -313,40 +310,17 @@ class GridShiftConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._data: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        """Select the Fronius entities used for battery control."""
-        errors: dict[str, str] = {}
+        """Create an empty bridge; GridShift owns discovery and mapping."""
         if user_input is not None:
-            mode_state = self.hass.states.get(user_input[CONF_CONTROL_MODE_ENTITY])
-            power_state = self.hass.states.get(user_input[CONF_CHARGE_POWER_ENTITY])
-            discharge_entity = user_input.get(CONF_DISCHARGE_POWER_ENTITY)
-            discharge_state = (
-                self.hass.states.get(discharge_entity) if discharge_entity else None
-            )
-            soc_state = self.hass.states.get(user_input[CONF_SOC_ENTITY])
-            if (
-                mode_state is None
-                or power_state is None
-                or soc_state is None
-                or (discharge_entity and discharge_state is None)
-            ):
-                errors["base"] = "entity_unavailable"
-            else:
-                self._data.update(user_input)
-                return await self.async_step_energy_sources()
+            await self.async_set_unique_id(DOMAIN)
+            self._abort_if_unique_id_configured()
+            if self._async_current_entries():
+                return self.async_abort(reason="already_configured")
+            return self.async_create_entry(title="GridShift Bridge", data={})
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_SOC_ENTITY): _entity("sensor", FRONIUS_DOMAIN),
-                    vol.Required(CONF_CONTROL_MODE_ENTITY): _entity("select", FRONIUS_DOMAIN),
-                    vol.Required(CONF_CHARGE_POWER_ENTITY): _entity("number", FRONIUS_DOMAIN),
-                    vol.Optional(CONF_DISCHARGE_POWER_ENTITY): _entity(
-                        "number", FRONIUS_DOMAIN
-                    ),
-                }
-            ),
-            errors=errors,
+            data_schema=vol.Schema({}),
         )
 
     async def async_step_energy_sources(
@@ -546,6 +520,8 @@ class GridShiftOptionsFlow(config_entries.OptionsFlow):
         self._entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
+        if CONF_CONTROL_MODE_ENTITY not in self._entry.data:
+            return self.async_abort(reason="configure_in_gridshift")
         errors: dict[str, str] = {}
         if user_input is not None:
             error = _validate_limits(user_input)

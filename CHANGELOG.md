@@ -2,6 +2,17 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.9.1 - 2026-11-07
+
+- Replaced the entity-heavy Home Assistant setup wizard with a zero-input
+  GridShift Bridge setup.
+- New entries now load safely before GridShift has discovered and mapped any
+  entities.
+- Existing configured entries keep their current optimizer and battery-control
+  behavior.
+- Unconfigured bridge options direct the user back to GridShift instead of
+  opening incomplete Home Assistant forms.
+
 ## 0.8.0 - 2026-11-06
 
 - Added an energy-integration step for price, meter/phases, solar, and EV data.
