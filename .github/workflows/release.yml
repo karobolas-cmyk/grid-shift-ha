@@ -31,8 +31,8 @@ jobs:
       - name: Build Home Assistant package
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME#release/}"
-          version="${tag#v}"
+          version="$(python -c 'import json; print(json.load(open("custom_components/gridshift_battery/manifest.json"))["version"])')"
+          tag="v${version}"
           zip -r "gridshift-battery-${version}.zip" custom_components hacs.json README.md LICENSE
           echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
           echo "RELEASE_ASSET=gridshift-battery-${version}.zip" >> "$GITHUB_ENV"

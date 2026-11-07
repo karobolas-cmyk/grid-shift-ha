@@ -3,14 +3,9 @@
   "config": {
     "step": {
       "user": {
-        "title": "Fronius battery control",
-        "description": "Choose entities created by callifo/fronius_modbus.",
-        "data": {
-          "soc_entity": "Battery state of charge",
-          "control_mode_entity": "Storage control mode",
-          "charge_power_entity": "Grid charge power",
-          "discharge_power_entity": "Grid discharge power (optional)"
-        }
+        "title": "Connect GridShift",
+        "description": "This creates a local GridShift bridge. No entities are selected in Home Assistant. Connect this home from GridShift to discover, review, and configure its energy entities.",
+        "data": {}
       },
       "energy_sources": {
         "title": "Energy integrations",
@@ -126,6 +121,9 @@
       "target_not_above_minimum": "The target state of charge must exceed the minimum.",
       "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
       "required_control_modes_missing": "The selected storage-control entity does not expose the configured GridShift modes."
+    },
+    "abort": {
+      "configure_in_gridshift": "This bridge is configured from GridShift. Connect Home Assistant in the GridShift app to discover and map entities."
     }
   }
 }
