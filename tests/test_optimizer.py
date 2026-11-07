@@ -192,3 +192,49 @@ def test_hold_requires_phase_margin_for_lost_battery_support() -> None:
         scenario(prices=[0.5, 0.4, 2.0, 2.2], soc=50, currents=(18, 5, 5))
     )
     assert decision.action != "hold"
+
+def test_manual_force_charge_overrides_expensive_price_but_keeps_phase_limit() -> None:
+    data = replace(
+        scenario(prices=[2.0, 0.3, 0.4, 0.8], currents=(7, 18, 4)),
+        force_action="charge",
+    )
+    decision = optimize(data)
+
+    assert decision.action == "charge"
+    assert decision.reason == "manual_force_charge"
+    assert decision.charge_power_w == 690
+
+
+def test_manual_force_idle_overrides_a_selected_charge_slot() -> None:
+    decision = optimize(
+        replace(
+            scenario(prices=[0.3, 0.4, 1.0, 1.8]),
+            force_action="idle",
+        )
+    )
+
+    assert decision.action == "idle"
+    assert decision.reason == "manual_force_idle"
+
+
+def test_manual_force_discharge_requires_opt_in_and_minimum_soc() -> None:
+    blocked = optimize(
+        replace(
+            scenario(prices=[0.3, 0.4, 1.0, 1.8], soc=50),
+            force_action="discharge",
+        )
+    )
+    assert blocked.action == "blocked"
+    assert blocked.reason == "grid_discharge_not_enabled"
+
+    active = optimize(
+        replace(
+            scenario(prices=[0.3, 0.4, 1.0, 1.8], soc=50),
+            force_action="discharge",
+            discharge_enabled=True,
+        )
+    )
+    assert active.action == "discharge"
+    assert active.reason == "manual_force_discharge"
+    assert active.discharge_power_w == 3500
+
