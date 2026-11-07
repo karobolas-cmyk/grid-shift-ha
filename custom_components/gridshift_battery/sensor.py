@@ -197,5 +197,6 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "last_charge_power_w": self.runtime.controller.last_power_w,
             "last_discharge_power_w": self.runtime.controller.last_discharge_power_w,
             "control_error": data.control_error,
+            "control_execution": dict(self.runtime.controller.execution),
         }
 

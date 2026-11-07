@@ -17,13 +17,14 @@ from custom_components.gridshift_battery.const import (
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_MODE_SETTLE_SECONDS,
 )
-from custom_components.gridshift_battery.controller import BatteryController
+from custom_components.gridshift_battery.controller import BatteryController, PowerReadbackError
 from custom_components.gridshift_battery.models import Decision
 
 
 class FakeState:
     def __init__(self, state: str) -> None:
         self.state = state
+        self.last_reported = datetime.now(UTC)
 
 
 class FakeStates:
@@ -43,6 +44,8 @@ class FakeServices:
         self.events.append(("service", domain, service, dict(data)))
         if domain == "select":
             self.states.values[data["entity_id"]].state = data["option"]
+        elif domain == "number":
+            self.states.values[data["entity_id"]] = FakeState(str(data["value"]))
 
 
 class FakeStorage:
@@ -107,6 +110,9 @@ def test_charge_changes_mode_waits_then_writes_power() -> None:
     assert events[1] == ("sleep", 20.0)
     assert events[2][1:3] == ("number", "set_value")
     assert events[2][3] == {"entity_id": "number.grid_charge_power", "value": 2340}
+    assert actuator.execution["status"] == "confirmed"
+    assert actuator.execution["readback_power_w"] == 2340
+    assert actuator.execution["power_write_confirmed"] is True
 
 
 def test_hold_changes_mode_waits_without_writing_power() -> None:
@@ -237,7 +243,113 @@ def test_rate_update_reports_unavailable_control_timeout() -> None:
     finally:
         controller_module.asyncio.sleep = original_sleep
 
-    assert events == [("sleep", 0.5), ("sleep", 0.5)]
+    assert events[:2] == [("sleep", 0.5), ("sleep", 0.5)]
+    assert events[2][3]["option"] == "Auto"
+    assert actuator.execution["failed_stage"] == "wait_power_entity"
+
+
+def test_mode_change_cannot_confirm_an_inherited_power_value(monkeypatch) -> None:
+    actuator, events = controller()
+    actuator.hass.states.values["number.grid_charge_power"] = FakeState("3263")
+    original_call = actuator.hass.services.async_call
+
+    async def ignore_number_write(domain, service, data, blocking=False) -> None:
+        if domain == "number":
+            events.append(("service", domain, service, dict(data)))
+            # Fronius reports its remembered rate after the new mode is active.
+            actuator.hass.states.values[data["entity_id"]] = FakeState("3263")
+            return
+        await original_call(domain, service, data, blocking=blocking)
+
+    async def no_sleep(seconds) -> None:
+        return None
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", ignore_number_write)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(controller_module, "POWER_READBACK_TIMEOUT_SECONDS", 1)
+    with pytest.raises(PowerReadbackError, match="Requested 10000 W.*3263"):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert actuator.execution["status"] == "failed"
+    assert actuator.execution["failed_stage"] == "verify_power"
+    assert actuator.execution["service_call_succeeded"] is True
+    assert actuator.execution["power_write_confirmed"] is False
+    assert actuator.execution["fallback_mode"] == "Auto"
+    assert actuator.last_power_w == 0
+
+
+def test_old_matching_value_without_a_new_report_is_not_confirmation(monkeypatch) -> None:
+    actuator, _ = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"] = FakeState("2340")
+    original_call = actuator.hass.services.async_call
+
+    async def no_number_report(domain, service, data, blocking=False) -> None:
+        if domain != "number":
+            await original_call(domain, service, data, blocking=blocking)
+
+    async def no_sleep(seconds) -> None:
+        return None
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", no_number_report)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(controller_module, "POWER_READBACK_TIMEOUT_SECONDS", 1)
+    with pytest.raises(PowerReadbackError, match="fresh after write: False"):
+        asyncio.run(actuator.async_apply(Decision("charge", 2340, "test_charge")))
+
+
+def test_delayed_matching_readback_confirms_the_requested_rate(monkeypatch) -> None:
+    actuator, _ = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"] = FakeState("3263")
+
+    async def no_number_report(domain, service, data, blocking=False) -> None:
+        return None
+
+    async def publish_after_sleep(seconds) -> None:
+        actuator.hass.states.values["number.grid_charge_power"] = FakeState("10000")
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", no_number_report)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", publish_after_sleep)
+    asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert actuator.execution["status"] == "confirmed"
+    assert actuator.execution["readback_fresh"] is True
+    assert actuator.last_power_w == 10000
+
+
+def test_failed_number_service_is_not_hidden_by_a_positive_rate(monkeypatch) -> None:
+    actuator, _ = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"] = FakeState("3263")
+    original_call = actuator.hass.services.async_call
+
+    async def fail_number(domain, service, data, blocking=False) -> None:
+        if domain == "number":
+            raise RuntimeError("number service refused the write")
+        await original_call(domain, service, data, blocking=blocking)
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", fail_number)
+    with pytest.raises(RuntimeError, match="number service refused"):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert actuator.execution["failed_stage"] == "write_power"
+    assert actuator.execution["service_call_succeeded"] is False
+    assert actuator.execution["status"] == "failed"
+    assert actuator.execution["fallback_mode"] == "Auto"
+
+
+def test_disabling_during_settle_prevents_the_power_write(monkeypatch) -> None:
+    actuator, events = controller()
+
+    async def disable_during_sleep(seconds) -> None:
+        await actuator.async_set_enabled(False)
+
+    monkeypatch.setattr(controller_module.asyncio, "sleep", disable_during_sleep)
+    with pytest.raises(RuntimeError, match="disabled or Fronius mode changed"):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert not any(event[1] == "number" for event in events)
 
 
 def test_disarming_grid_discharge_only_returns_to_auto() -> None:
