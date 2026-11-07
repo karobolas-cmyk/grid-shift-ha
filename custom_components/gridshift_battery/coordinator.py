@@ -52,7 +52,7 @@ from .const import (
     DEFAULTS,
     DOMAIN,
 )
-from .controller import BatteryController, RuntimeStorage
+from .controller import BatteryController, PowerReadbackError, RuntimeStorage
 from .models import Decision, OptimizerInput
 from .optimizer import optimize
 from .price import parse_price_slots
@@ -330,7 +330,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 action="blocked",
                 charge_power_w=0,
                 discharge_power_w=0,
-                reason="control_write_failed",
+                reason=(
+                    "power_write_unconfirmed"
+                    if isinstance(err, PowerReadbackError)
+                    else "control_write_failed"
+                ),
                 control_error=f"{type(err).__name__}: {err}",
             )
         if override:
@@ -341,6 +345,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 discharge_power_w=0,
                 reason=override,
             )
-        await self.storage.async_save()
+        if not self.controller.enabled:
+            await self.storage.async_save()
         return decision
 

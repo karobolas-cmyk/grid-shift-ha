@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -22,6 +25,15 @@ from .const import (
 )
 from .learning import ConsumptionModel
 from .models import Decision
+
+_LOGGER = logging.getLogger(__name__)
+POWER_READBACK_TIMEOUT_SECONDS = 30.0
+POWER_READBACK_POLL_SECONDS = 0.5
+POWER_READBACK_TOLERANCE_W = 5.0
+
+
+class PowerReadbackError(RuntimeError):
+    """The requested setpoint was not observed after a successful service call."""
 
 
 @dataclass(slots=True)
@@ -78,6 +90,8 @@ class BatteryController:
         self.storage = storage
         self.last_power_w = 0
         self.last_discharge_power_w = 0
+        self.execution: dict[str, Any] = {}
+        self._apply_lock = asyncio.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -230,6 +244,15 @@ class BatteryController:
 
     async def _set_power(self, entity_id: str, power_w: int) -> int:
         rounded = int(power_w) // 10 * 10
+        started = datetime.now(UTC)
+        self.execution.update(
+            stage="write_power",
+            power_entity=entity_id,
+            commanded_power_w=rounded,
+            previous_power_w=self._read_power(entity_id),
+            write_started_at=started.isoformat(),
+            service_call_succeeded=False,
+        )
         await self.hass.services.async_call(
             "number",
             "set_value",
@@ -239,13 +262,62 @@ class BatteryController:
             },
             blocking=True,
         )
-        return rounded
+        self.execution.update(
+            stage="verify_power",
+            service_call_succeeded=True,
+            write_returned_at=datetime.now(UTC).isoformat(),
+        )
+        attempts = max(
+            1, int(POWER_READBACK_TIMEOUT_SECONDS / POWER_READBACK_POLL_SECONDS)
+        )
+        for attempt in range(attempts + 1):
+            state = self.hass.states.get(entity_id)
+            observed = self._read_power(entity_id)
+            reported_at = (
+                getattr(state, "last_reported", None)
+                or getattr(state, "last_updated", None)
+            )
+            fresh = isinstance(reported_at, datetime) and reported_at >= started
+            self.execution.update(
+                readback_power_w=observed,
+                readback_at=reported_at.isoformat() if reported_at else None,
+                readback_fresh=fresh,
+            )
+            if not self.enabled or self._mode() != self.execution["requested_mode"]:
+                raise PowerReadbackError("Control was disabled or Fronius mode changed")
+            if (
+                fresh
+                and observed is not None
+                and abs(observed - rounded) <= POWER_READBACK_TOLERANCE_W
+            ):
+                self.execution["power_write_confirmed"] = True
+                return rounded
+            if attempt < attempts:
+                await asyncio.sleep(POWER_READBACK_POLL_SECONDS)
+        raise PowerReadbackError(
+            f"Requested {rounded} W on {entity_id}; read back "
+            f"{self.execution['readback_power_w']} W "
+            f"(fresh after write: {self.execution['readback_fresh']})"
+        )
+
+    def _read_power(self, entity_id: str) -> float | None:
+        """Return the observed setpoint, never a remembered command."""
+        state = self.hass.states.get(entity_id)
+        try:
+            value = float(state.state) if state is not None else float("nan")
+        except (TypeError, ValueError):
+            return None
+        return value if isfinite(value) else None
 
     async def _settle_mode(self, mode: str) -> None:
         """Select a Fronius mode, wait for it to settle, then verify it."""
         if self._mode() != mode:
+            self.execution["stage"] = "select_mode"
             await self._set_mode(mode)
+            self.execution["stage"] = "settle_mode"
             await asyncio.sleep(max(0, float(self.config[CONF_MODE_SETTLE_SECONDS])))
+        if not self.enabled:
+            raise RuntimeError("Control was disabled or Fronius mode changed before power write")
         if self._mode() != mode:
             raise RuntimeError(f"Fronius storage mode did not settle to {mode}")
 
@@ -270,12 +342,82 @@ class BatteryController:
     async def _enter_mode(self, mode: str, power_entity: str) -> None:
         """Enter a power-control mode and verify its mode-specific entity."""
         await self._settle_mode(mode)
+        self.execution["stage"] = "wait_power_entity"
         await self._wait_for_power_entity(power_entity, mode)
+        if not self.enabled or self._mode() != mode:
+            raise RuntimeError("Control was disabled or Fronius mode changed before power write")
 
     async def async_apply(self, decision: Decision) -> str | None:
         """Apply a decision and return an override reason when control is refused."""
+        async with self._apply_lock:
+            return await self._async_apply_serialized(decision)
+
+    async def _async_apply_serialized(self, decision: Decision) -> str | None:
+        """Keep mode, power write and acknowledgement in one serialized attempt."""
         if not self.enabled:
             return None
+
+        requested_modes = {
+            "charge": self.config[CONF_CHARGE_MODE_OPTION],
+            "discharge": self.config[CONF_DISCHARGE_MODE_OPTION],
+            "hold": self.config[CONF_BLOCK_DISCHARGE_MODE_OPTION],
+        }
+        self.execution = {
+            "command_id": uuid4().hex,
+            "action": decision.action,
+            "requested_mode": requested_modes.get(
+                decision.action, self.config[CONF_AUTO_MODE_OPTION]
+            ),
+            "requested_power_w": (
+                decision.discharge_power_w
+                if decision.action == "discharge"
+                else decision.charge_power_w
+            ),
+            "status": "pending",
+            "stage": "check_mode",
+            "started_at": datetime.now(UTC).isoformat(),
+            "power_write_confirmed": False,
+        }
+        try:
+            override = await self._async_apply_decision(decision)
+        except Exception as err:
+            self.execution.update(
+                status="failed",
+                failed_stage=self.execution["stage"],
+                error=f"{type(err).__name__}: {err}",
+            )
+            # A mode transition may have restored an old non-zero rate. Return
+            # to Auto if this attempt did not confirm its own power command.
+            if self._mode() == self.execution["requested_mode"] and decision.action in {
+                "charge", "discharge", "hold"
+            }:
+                try:
+                    await self.async_release_control()
+                    self.execution["fallback_mode"] = self._mode()
+                except Exception as release_err:
+                    self.execution["fallback_error"] = (
+                        f"{type(release_err).__name__}: {release_err}"
+                    )
+                    _LOGGER.exception("Could not return Fronius to Auto after an unverified write")
+            self.execution["finished_at"] = datetime.now(UTC).isoformat()
+            raise
+        self.execution.update(
+            status="refused" if override else "confirmed",
+            stage="complete",
+            finished_at=datetime.now(UTC).isoformat(),
+            observed_mode=self._mode(),
+        )
+        try:
+            await self.storage.async_save()
+        except Exception as err:
+            # Persistence failure must not turn a verified device write into a
+            # misleading write failure; report it separately for diagnostics.
+            self.execution["persistence_error"] = f"{type(err).__name__}: {err}"
+            _LOGGER.exception("Could not persist GridShift state after applying a decision")
+        return override
+
+    async def _async_apply_decision(self, decision: Decision) -> str | None:
+        """Execute one attempt; only verified rates update the command history."""
 
         auto = self.config[CONF_AUTO_MODE_OPTION]
         charging = self.config[CONF_CHARGE_MODE_OPTION]
@@ -293,7 +435,6 @@ class BatteryController:
             self.storage.state.owns_control = False
             self.last_power_w = 0
             self.last_discharge_power_w = 0
-            await self.storage.async_save()
             return "manual_mode_override"
 
         if decision.action == "charge" and decision.charge_power_w > 0:
@@ -322,8 +463,10 @@ class BatteryController:
             self.last_power_w = 0
             self.storage.state.owns_control = True
         else:
+            self.execution["stage"] = "release_auto"
             await self.async_release_control()
-        await self.storage.async_save()
+            if self._mode() != auto:
+                raise RuntimeError("Fronius storage mode did not return to Auto")
         return None
 
     async def async_release_control(self) -> None:

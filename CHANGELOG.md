@@ -2,6 +2,18 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.4 - 2026-11-07
+
+- Confirm every charge/discharge setpoint with a fresh matching Home Assistant
+  report after the number service succeeds. A restored non-zero Fronius rate,
+  including an old rate equal to the target, is not a command acknowledgement.
+- Expose the current command ID, requested power, write stage, service outcome,
+  readback value and timestamp, and exact error in the action sensor.
+- Return to Auto after an unconfirmed power write so an inherited rate is not
+  left running. Do not write power if control is disabled during mode settling.
+- Add regressions for a retained 3263 W rate after a 10000 W request, failed
+  number writes, delayed readback, and stale matching values.
+
 ## 0.12.3 - 2026-11-07
 
 - Wait for Fronius mode-specific charge and discharge controls to become
