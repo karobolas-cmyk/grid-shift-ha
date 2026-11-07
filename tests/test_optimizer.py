@@ -125,6 +125,7 @@ def test_capacity_tariff_moves_charge_away_from_new_peak() -> None:
     decision = optimize(
         replace(
             data,
+            soc_pct=15,
             capacity_tariff_enabled=True,
             capacity_tariff_model="top3_average",
             capacity_tariff_rate_per_kw=100,
@@ -174,3 +175,20 @@ def test_grid_discharge_keeps_adaptive_soc_reserve() -> None:
     decision = optimize(data)
     assert decision.action != "discharge"
     assert decision.discharge_power_w == 0
+
+
+def test_reserves_stored_energy_for_a_later_price_peak() -> None:
+    decision = optimize(
+        scenario(prices=[0.5, 0.4, 2.0, 2.2], soc=50)
+    )
+    assert decision.action == "hold"
+    assert decision.reason == "battery_reserved_for_later_peak"
+    assert decision.charge_power_w == 0
+    assert decision.discharge_power_w == 0
+
+
+def test_hold_requires_phase_margin_for_lost_battery_support() -> None:
+    decision = optimize(
+        scenario(prices=[0.5, 0.4, 2.0, 2.2], soc=50, currents=(18, 5, 5))
+    )
+    assert decision.action != "hold"
