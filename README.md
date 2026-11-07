@@ -10,6 +10,11 @@ respecting the least available headroom across all three phases. It is designed
 around Swedish electricity conditions, quarter-hour prices, weak winter solar
 production, electric heating, EV charging, and grid capacity tariffs.
 
+Configuration belongs in the GridShift application. Adding this integration in
+Home Assistant creates a local bridge and does **not** ask you to select
+entities. Connect the Home Assistant home in GridShift afterward; discovery,
+review, and entity mapping happen there.
+
 The battery control path is native to
 [`callifo/fronius_modbus`](https://github.com/callifo/fronius_modbus). GridShift
 uses its `Storage Control Mode`, `Grid Charge Power`, and optional
