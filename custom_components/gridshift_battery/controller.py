@@ -310,7 +310,9 @@ class BatteryController:
                 self.execution["stage"] = "retry_power_write"
                 await asyncio.sleep(POWER_WRITE_RETRY_SECONDS)
                 if not self.enabled or self._mode() != self.execution["requested_mode"]:
-                    raise RuntimeError("Control was disabled or Fronius mode changed during retry")
+                    raise RuntimeError(
+                        "Control was disabled or Fronius mode changed during retry"
+                    ) from err
                 await self._wait_for_power_entity(entity_id, self.execution["requested_mode"])
         raise RuntimeError("Power write attempts exhausted")
 
