@@ -65,6 +65,7 @@ from .const import (
 from .controller import BatteryController, LiveSafetyError, PowerReadbackError, RuntimeStorage
 from .measurements import power_snapshot, report_time
 from .models import Decision, OptimizerInput
+from .notifications import NotificationManager
 from .optimizer import optimize
 from .power import (
     battery_power_inverted,
@@ -112,6 +113,10 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         self.thermal.phase_guard = self._guard_thermal_increase
         self.thermal_task = None
         self.price_task = None
+        self.notifications = NotificationManager(
+            hass, storage, entry.entry_id, getattr(entry, "title", "Home"),
+        )
+        self.notification_task = None
         super().__init__(
             hass,
             _LOGGER,
@@ -342,6 +347,37 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         )
 
     async def _async_update_data(self) -> Decision:
+        """Keep notification delivery out of the physical control path."""
+        try:
+            decision = await self._async_decide()
+        except UpdateFailed:
+            self._queue_notifications(None, input_failed=True)
+            raise
+        self._queue_notifications(decision)
+        return decision
+
+    def _queue_notifications(self, decision: Decision | None, *, input_failed=False) -> None:
+        if not self.notifications.settings["enabled"] or (
+            self.notification_task and not self.notification_task.done()
+        ):
+            return
+
+        async def evaluate():
+            try:
+                await self.notifications.async_evaluate(
+                    decision, dt_util.now(), enabled=self.controller.enabled,
+                    pause_reason=self.controller.pause_reason,
+                    thermal={**self.thermal.snapshot, "write_fault": any(
+                        zone.get("error") for zone in self.storage.state.thermal_state.values()
+                    )},
+                    input_failed=input_failed,
+                )
+            except Exception:
+                _LOGGER.exception("Could not evaluate GridShift notifications")
+
+        self.notification_task = self.hass.async_create_task(evaluate())
+
+    async def _async_decide(self) -> Decision:
         now = dt_util.now()
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)

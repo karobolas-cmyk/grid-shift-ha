@@ -66,4 +66,32 @@ set_plan_overrides:
       selector:
         object:
 
+set_notifications:
+  name: Configure anomaly notifications
+  description: >-
+    Saves opt-in notification recipients and events without changing battery or
+    thermostat control. Recipients are explicit mobile-app actions or notify entities.
+  fields:
+    settings:
+      name: Notification settings
+      required: true
+      example:
+        enabled: true
+        targets:
+          - notify.mobile_app_your_phone
+        events:
+          - control_error
+          - missing_data
+          - reserve_shortfall
+        recovery: true
+        language: sv
+      selector:
+        object:
+
+test_notifications:
+  name: Send a test notification
+  description: >-
+    Sends a test only to saved notification recipients, even when automatic
+    notifications are disabled. Limited to one test per minute.
+
 

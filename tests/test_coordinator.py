@@ -119,7 +119,7 @@ def test_reported_zero_phases_and_battery_supplied_house_still_plan(monkeypatch)
         )
         item = cls(
             hass,
-            SimpleNamespace(data=config, options={}),
+            SimpleNamespace(data=config, options={}, entry_id="entry", title="Home"),
             RuntimeStorage(SimpleNamespace(async_save=save), None),
             controller,
         )
@@ -162,5 +162,48 @@ def test_reported_zero_phases_and_battery_supplied_house_still_plan(monkeypatch)
         await asyncio.gather(*tasks)
         assert item.prices.snapshot["status"] == "ready"
         assert len(item.prices.snapshot["slots"]) == 2
+
+    asyncio.run(run())
+
+
+def test_slow_or_failed_push_delivery_never_delays_or_changes_control(monkeypatch):
+    cls = coordinator_class(monkeypatch)
+
+    async def run():
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def save(data):
+            pass
+
+        async def send(*args, **kwargs):
+            started.set()
+            await release.wait()
+            raise RuntimeError("phone offline")
+
+        hass = SimpleNamespace(
+            services=SimpleNamespace(has_service=lambda *args: True, async_call=send),
+            states=SimpleNamespace(get=lambda _: None), async_create_task=asyncio.create_task,
+        )
+        controller = SimpleNamespace(enabled=True, pause_reason=None)
+        item = cls(hass, SimpleNamespace(data={}, options={}, entry_id="entry", title="Home"),
+                   RuntimeStorage(SimpleNamespace(async_save=save), None), controller)
+        await item.notifications.async_configure({
+            "enabled": True, "targets": ["notify.mobile_app_phone"],
+            "events": ["control_error"], "recovery": True, "language": "sv",
+        })
+        decision = Decision("blocked", 0, "control_write_failed")
+
+        async def decide():
+            return decision
+
+        item._async_decide = decide
+        assert await item._async_update_data() is decision
+        await started.wait()
+        assert not item.notification_task.done()
+        assert await item._async_update_data() is decision
+        release.set()
+        await item.notification_task
+        assert item.notifications.snapshot["last_error"]["error"] == "RuntimeError"
+        assert controller.enabled is True
 
     asyncio.run(run())

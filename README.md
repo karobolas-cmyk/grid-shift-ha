@@ -37,6 +37,33 @@ uses its `Storage Control Mode`, `Grid Charge Power`, and optional
 Open the private live-control dashboard:
 [GridShift Battery Optimizer](https://gridshift-battery-lab-6ddf9da3.exactmatch.chatgpt.site).
 
+### Anomaly push notifications
+
+From **Home → Push notifications** in GridShift, choose one or more phones,
+select the events, and save to HA. A **Send test** button sends an explicitly
+requested test to the saved recipients. Automatic notifications start off.
+The phone must be registered in the HA Companion App with notification permission;
+supported targets are `notify.mobile_app_*` actions and existing `notify` entities.
+HA must be running to detect and send alerts; this is not external HA uptime monitoring.
+
+GridShift reports failed or unconfirmed control commands immediately, missing
+prices/required measurements after five minutes while control is enabled, and
+a projected reserve deficit of at least 1 kWh after ten minutes. A low current
+SoC alone is not a deficit if the rolling plan can still reach its target.
+Normal Auto, intentional reserve holding and phase-limited charging are not faults.
+
+Each ongoing incident notifies each recipient once, including across restarts.
+Failed recipients retry after fifteen minutes. Optional recovery messages require
+two healthy minutes. All messages are ordinary notifications, without critical
+alert priority or remote-control actions. HA accepting a notify action is not
+proof the phone displayed it. Recent attempts/errors are available in the dashboard.
+
+The HA actions `gridshift_battery.set_notifications` and
+`gridshift_battery.test_notifications` also expose this functionality directly.
+Saving notification settings never reloads the integration, changes the active
+battery mode or enables battery/thermostat control. No generic notify broadcast
+or arbitrary message/service is exposed through the dashboard relay.
+
 > GridShift can control physical high-power equipment. Automatic control starts
 > disabled. Verify the recommendation sensors and use conservative limits before
 > enabling it.
