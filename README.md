@@ -123,9 +123,9 @@ changing the optimizer.
 7. A price entity or the Home Assistant Tibber integration.
 
 Disable competing scheduled charge/discharge rules in Fronius. GridShift first
-selects the operating mode, waits 20 seconds by default, and only then writes the
-power entity used by that mode, matching the contract documented by
-`fronius_modbus`.
+selects the operating mode and waits 20 seconds by default. Charge and export
+modes then write their mode-specific power entity; `Block Discharging` needs no
+power write. This matches the contract documented by `fronius_modbus`.
 
 ## Installation with HACS
 
@@ -156,12 +156,13 @@ The setup flow first asks for the Fronius control entities:
 | Phase currents | `Current L1`, `Current L2`, `Current L3` |
 
 For the BYD storage shown by `callifo/fronius_modbus`, GridShift deliberately
-uses only these three storage states:
+uses these four storage states:
 
 | Storage control mode | Number entity used after the mode settles |
 | --- | --- |
 | `Auto` | None; returning control only selects `Auto` |
 | `Charge from Grid` | `number.*_grid_charge_power_*` |
+| `Block Discharging` | None; the selected mode is the control |
 | `Discharge to Grid` | `number.*_grid_discharge_power_*` |
 
 `number.*_pv_charge_limit_*` and `number.*_discharge_limit_*` belong to the
@@ -267,15 +268,21 @@ to 10 W.
 
 Every special storage mode follows the same state machine:
 
-1. Select `Charge from Grid` or `Discharge to Grid`.
+1. Select `Charge from Grid`, `Block Discharging`, or `Discharge to Grid`.
 2. Wait the configured settle time, 20 seconds by default.
-3. Verify that the matching number entity is available.
-4. Write `Grid Charge Power` or `Grid Discharge Power` in 10 W steps.
+3. For charge or export, verify that the matching number entity is available.
+4. For charge or export, write the mode-specific power in 10 W steps. Holding
+   stored energy requires no power write after `Block Discharging` settles.
 5. When the action ends, select `Auto`. No 0 W write is sent during release.
 
 The wait is performed when entering or changing a special mode. Later rate
 updates in the already active mode can write the same mode-specific number
 directly; reselecting the mode would reset that number to zero.
+
+When stored energy is more valuable in a later expensive period, GridShift can
+select `Block Discharging` to keep it in reserve. This hold is only used when
+phase headroom can safely absorb the loss of battery support. It ends by returning
+to `Auto` or entering the next planned mode.
 
 Grid export has a second, independent **Allow discharge to grid** switch. Both
 that switch and **Automatic battery control** must be enabled before physical
