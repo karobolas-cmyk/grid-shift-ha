@@ -2,6 +2,26 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.13.0 - 2026-11-07
+
+- Persist the chosen price provider in Home Assistant. Support native direct
+  Nord Pool, the official Nord Pool service, Tibber, and mapped price attributes.
+- Expose the exact published price series to the dashboard. Cache valid prices
+  across restarts and transport failures; never extend prices beyond coverage.
+- Keep multiple Tibber homes separate and require selection when ambiguous.
+- Forward actual HA report times for power measurements, so unchanged 0 W
+  readings remain usable without refreshing stopped sensors artificially.
+- Use report times for phase freshness and refresh native diagnostics every
+  30 seconds, including when meter readings are unchanged.
+- Add separately armed Automatic climate control for explicitly mapped zones,
+  bounded baseline/deviation, heating/cooling direction and native price/COP
+  ranking. Do not switch HVAC modes or turn inactive equipment on.
+- Stagger thermostat writes, confirm target readback, respect manual changes,
+  and reserve phase capacity before increasing thermal demand. Preserve battery
+  guards and explicit grid-export opt-in.
+- Restore targets still owned by GridShift on disable/reconfiguration/unload;
+  a readback or restoration failure remains visible in diagnostics.
+
 ## 0.12.7 - 2026-11-07
 
 - Normalize Fronius SolarNet battery power: negative means charging, positive

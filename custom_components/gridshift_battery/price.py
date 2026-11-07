@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime, time, timedelta, tzinfo
+from math import isfinite
 from typing import Any
 
 from .models import PriceSlot
@@ -21,7 +22,7 @@ def _number(value: Any) -> float | None:
         result = float(value)
     except (TypeError, ValueError):
         return None
-    return result if result == result else None
+    return result if isfinite(result) else None
 
 
 def _datetime(value: Any, timezone: tzinfo, day: date | None = None) -> datetime | None:
@@ -69,13 +70,12 @@ def _parse_mapping_series(
         if len(pending) > 1
         else timedelta(hours=1)
     )
+    if not timedelta(0) < inferred_step <= timedelta(hours=1):
+        inferred_step = timedelta(minutes=15)
     for index, (start, end, price) in enumerate(pending):
         if end is None:
-            end = (
-                pending[index + 1][0]
-                if index + 1 < len(pending)
-                else start + inferred_step
-            )
+            next_start = pending[index + 1][0] if index + 1 < len(pending) else None
+            end = min(next_start, start + inferred_step) if next_start else start + inferred_step
         if end > start:
             slots.append(PriceSlot(start=start, end=end, price=price))
     return slots

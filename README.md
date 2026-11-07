@@ -80,7 +80,8 @@ Open the private live-control dashboard:
   solar credit and temperature-dependent heating reserve.
 - Optional capacity-tariff optimization with configurable peak model, rate,
   current billing-period peak, and active hours.
-- Experimental thermal planning using weather, COP, thermal mass, and price.
+- Native opt-in thermostat control using the same published prices as the battery
+  planner, with bounded targets and shared phase protection.
 - Per-thermostat baseline, maximum deviation, price response 1–10, strategy, and
   heat/cooling direction.
 - Thermostat health checks using current state freshness and the previous 24
@@ -265,7 +266,7 @@ sun angles from leaving the battery empty before an expensive evening.
 
 ## Thermal planning
 
-The hosted preview reads hourly forecasts from `weather.get_forecasts` and discovers
+GridShift reads hourly forecasts from `weather.get_forecasts` and discovers
 `climate.*` entities. Every selected thermostat has its own:
 
 - normal baseline, such as 22 °C;
@@ -275,9 +276,42 @@ The hosted preview reads hourly forecasts from `weather.get_forecasts` and disco
 - automatic or explicit `heat`, `cool`, or `heat_cool` direction.
 
 Heating setpoints move down during expensive intervals. Cooling/AC setpoints move
-up, and `heat_cool` widens its band around the baseline. These are simulated
-recommendations only; the hosted preview never writes thermostat commands. See
-[thermal control](docs/thermal-control.md).
+up. `heat_cool` preserves a neutral band around the baseline. Save the selected
+zones, baseline, maximum deviation, rated electrical power and phase to HA, then
+explicitly enable **Automatic climate control**. This is separate from battery
+control and defaults to off. The browser sends no arbitrary thermostat commands;
+the native controller evaluates prices, device limits, freshness and phase
+capacity before calling `climate.set_temperature`. See
+[thermal control](docs/thermal-control.md) for ownership and fallback behavior.
+
+## One price source in HA and the dashboard
+
+Save **Price source**, area, VAT and markup using **Save prices & thermostats to HA**.
+HA continues fetching and optimizing after the browser is closed. The chart uses
+HA's exact `market_prices` series and native rolling plan; changing a local
+setting only takes effect after saving it to HA.
+
+- `auto` follows the mapped entity's integration. It never borrows another
+  integration's prices when an unrelated entity lacks a forecast.
+- `ha_tibber` uses `tibber.get_prices`. If several homes are returned, explicitly
+  select the Tibber home. Tibber total prices already include their configured fees.
+- `ha_nordpool` uses the mapped official Nord Pool integration or the only
+  installed Nord Pool config entry, requesting published prices for the area.
+- `nordpool_direct` fetches published day-ahead prices directly in HA. SEK/MWh is
+  converted to SEK/kWh, then the chosen markup and VAT are applied.
+
+Published prices are cached across restarts and temporary network errors. Coverage
+ends at the last published interval; gaps and unpublished tomorrow prices are
+never filled by repeating the last price. With no valid forecast, grid charging
+and grid export stop and the inverter returns to Auto. Auto can still supply the
+house from its battery. The dashboard shows **Auto · waiting for prices** when
+that physical mode is confirmed; real mode/rate-write failures remain errors.
+
+The native `power_snapshot` includes real sensor `last_reported` timestamps. A
+repeated 0 W report remains valid even if `last_updated` is hours old. A new poll
+does not make a stopped sensor fresh. Map Fronius **Battery charging**, **Battery
+discharging**, **Consumed power**, **Grid import** and **Grid export** for live flow.
+Grid import is not household demand when the battery is supplying the house.
 
 The thermal model includes generic profiles for air-to-air, air-to-water,
 borehole ground-source, horizontal ground-loop, and resistive heating. Each

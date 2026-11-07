@@ -55,6 +55,9 @@ class PersistedState:
     forced_until: str | None = None
     plan_overrides: dict[str, str] = field(default_factory=dict)
     control_fault: dict[str, Any] = field(default_factory=dict)
+    price_cache: dict[str, Any] = field(default_factory=dict)
+    thermal_enabled: bool = False
+    thermal_state: dict[str, Any] = field(default_factory=dict)
 
 
 class RuntimeStorage:
@@ -71,6 +74,9 @@ class RuntimeStorage:
             forced_until=raw.get("forced_until"),
             plan_overrides=dict(raw.get("plan_overrides") or {}),
             control_fault=dict(raw.get("control_fault") or {}),
+            price_cache=dict(raw.get("price_cache") or {}),
+            thermal_enabled=bool(raw.get("thermal_enabled", False)),
+            thermal_state=dict(raw.get("thermal_state") or {}),
         )
         if self.state.control_fault:
             self.state.enabled = False
@@ -87,6 +93,9 @@ class RuntimeStorage:
                 "forced_until": self.state.forced_until,
                 "plan_overrides": self.state.plan_overrides,
                 "control_fault": self.state.control_fault,
+                "price_cache": self.state.price_cache,
+                "thermal_enabled": self.state.thermal_enabled,
+                "thermal_state": self.state.thermal_state,
                 "model": self.model.to_dict(),
             }
         )

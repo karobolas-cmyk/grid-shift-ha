@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from . import GridShiftRuntime
 from .const import CONF_DISCHARGE_POWER_ENTITY, DOMAIN
@@ -21,6 +22,7 @@ async def async_setup_entry(
     entities: list[SwitchEntity] = [GridShiftControlSwitch(runtime, entry)]
     if runtime.controller.config.get(CONF_DISCHARGE_POWER_ENTITY):
         entities.append(GridShiftDischargeSwitch(runtime, entry))
+    entities.append(GridShiftThermalSwitch(runtime, entry))
     async_add_entities(entities)
 
 
@@ -53,12 +55,11 @@ class GridShiftControlSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.runtime.controller.async_set_enabled(True)
-        await self.runtime.coordinator.async_refresh()
+        await self.runtime.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.runtime.controller.async_set_enabled(False)
-        await self.runtime.coordinator.async_refresh()
         self.async_write_ha_state()
 
 
@@ -90,10 +91,35 @@ class GridShiftDischargeSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.runtime.controller.async_set_discharge_enabled(True)
-        await self.runtime.coordinator.async_refresh()
+        await self.runtime.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.runtime.controller.async_set_discharge_enabled(False)
-        await self.runtime.coordinator.async_refresh()
+        await self.runtime.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+
+
+class GridShiftThermalSwitch(GridShiftControlSwitch):
+    """Thermostat control has its own explicit opt-in, separate from battery control."""
+
+    _attr_name = "Automatic climate control"
+    _attr_icon = "mdi:thermostat-auto"
+
+    def __init__(self, runtime: GridShiftRuntime, entry: ConfigEntry) -> None:
+        super().__init__(runtime, entry)
+        self._attr_unique_id = f"{entry.entry_id}_climate_control_enabled"
+
+    @property
+    def is_on(self) -> bool:
+        return self.runtime.coordinator.thermal.enabled
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.runtime.coordinator.thermal.async_set_enabled(True, dt_util.now())
+        await self.runtime.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.runtime.coordinator.thermal.async_set_enabled(False, dt_util.now())
+        await self.runtime.coordinator.async_request_refresh()
         self.async_write_ha_state()

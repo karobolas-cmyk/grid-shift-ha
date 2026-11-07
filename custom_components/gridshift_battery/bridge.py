@@ -24,6 +24,7 @@ from .const import (
     CONF_CAPACITY_TARIFF_START_HOUR,
     CONF_CHARGE_MODE_OPTION,
     CONF_CHARGE_POWER_ENTITY,
+    CONF_CLIMATE_RULES,
     CONF_CONTROL_MODE_ENTITY,
     CONF_CYCLE_COST,
     CONF_DISCHARGE_MODE_OPTION,
@@ -31,6 +32,7 @@ from .const import (
     CONF_EV_POWER_ENTITIES,
     CONF_EXPENSIVE_QUANTILE,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_GRID_POWER_ENTITY,
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
@@ -54,12 +56,23 @@ from .const import (
     CONF_PHASE_CURRENT_ENTITIES,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
+    CONF_PRICE_AREA,
     CONF_PRICE_ENTITY,
+    CONF_PRICE_MARKUP,
+    CONF_PRICE_PROVIDER,
+    CONF_PRICE_VAT,
     CONF_ROUND_TRIP_EFFICIENCY,
     CONF_SOC_ENTITY,
     CONF_SOLAR_PEAK_POWER_KWP,
     CONF_SOLAR_POWER_ENTITIES,
     CONF_SWEDISH_WINTER_MODE,
+    CONF_THERMAL_INTERVAL,
+    CONF_THERMAL_LOSS,
+    CONF_THERMAL_MANUAL_HOLD,
+    CONF_THERMAL_MASS,
+    CONF_THERMAL_MAX_AGE,
+    CONF_TIBBER_HOME,
+    CONF_WEATHER_ENTITY,
     CONF_WINTER_SOLAR_FACTOR,
 )
 from .fronius import missing_control_modes
@@ -69,6 +82,8 @@ SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 ATTR_CONFIGURATION = "configuration"
 
 ENTITY_FIELDS = {
+    CONF_GRID_POWER_ENTITY: "sensor",
+    CONF_WEATHER_ENTITY: "weather",
     CONF_GRID_EXPORT_SENSOR: "sensor",
     CONF_BATTERY_POWER_ENTITY: "sensor",
     CONF_BATTERY_CHARGE_SENSOR: "sensor",
@@ -95,6 +110,9 @@ REQUIRED_FIELDS = {
     CONF_CHARGE_POWER_ENTITY,
 }
 SETTING_FIELDS = {
+    CONF_PRICE_PROVIDER, CONF_PRICE_AREA, CONF_PRICE_VAT, CONF_PRICE_MARKUP,
+    CONF_TIBBER_HOME, CONF_CLIMATE_RULES, CONF_THERMAL_MASS, CONF_THERMAL_LOSS,
+    CONF_THERMAL_MAX_AGE, CONF_THERMAL_INTERVAL, CONF_THERMAL_MANUAL_HOLD,
     CONF_BATTERY_POWER_DIRECTION,
     CONF_HOUSE_LOAD_SOURCE,
     CONF_HOUSE_LOAD_DIRECTION,
@@ -142,6 +160,7 @@ BOOLEAN_FIELDS = {
     CONF_SWEDISH_WINTER_MODE,
 }
 STRING_FIELDS = {
+    CONF_PRICE_PROVIDER, CONF_PRICE_AREA,
     CONF_BATTERY_POWER_DIRECTION,
     CONF_HOUSE_LOAD_SOURCE,
     CONF_HOUSE_LOAD_DIRECTION,
@@ -152,6 +171,10 @@ STRING_FIELDS = {
     CONF_DISCHARGE_MODE_OPTION,
 }
 NUMBER_RANGES = {
+    CONF_PRICE_VAT: (0, 100), CONF_PRICE_MARKUP: (-100, 1000),
+    CONF_THERMAL_MASS: (0.5, 200), CONF_THERMAL_LOSS: (0.01, 5),
+    CONF_THERMAL_MAX_AGE: (300, 7200), CONF_THERMAL_INTERVAL: (300, 3600),
+    CONF_THERMAL_MANUAL_HOLD: (15, 1440),
     CONF_BATTERY_CAPACITY_KWH: (1, 200),
     CONF_CAPACITY_TARIFF_END_HOUR: (0, 24),
     CONF_CAPACITY_TARIFF_RATE_PER_KW: (0, 1000),
@@ -201,7 +224,10 @@ def validate_configuration(
     unknown = set(raw) - ALLOWED_FIELDS
     if unknown:
         raise HomeAssistantError(f"unsupported configuration fields: {', '.join(sorted(unknown))}")
-    missing = REQUIRED_FIELDS - set(raw)
+    required = REQUIRED_FIELDS - ({CONF_PRICE_ENTITY} if raw.get(CONF_PRICE_PROVIDER) in {
+        "nordpool_direct", "ha_tibber", "ha_nordpool",
+    } else set())
+    missing = required - set(raw)
     if missing:
         raise HomeAssistantError(f"missing configuration fields: {', '.join(sorted(missing))}")
 
@@ -219,7 +245,7 @@ def validate_configuration(
         )
     for field, domain in ENTITY_FIELDS.items():
         value = result.get(field)
-        if value in (None, "") and field not in REQUIRED_FIELDS:
+        if value in (None, "") and field not in required:
             result.pop(field, None)
             continue
         entity_id = _entity_id(value, domain, field)
@@ -248,7 +274,7 @@ def validate_configuration(
             raise HomeAssistantError(f"{field} must be a boolean")
     measurement_fields = (
         CONF_BATTERY_POWER_ENTITY, CONF_BATTERY_CHARGE_SENSOR,
-        CONF_BATTERY_DISCHARGE_SENSOR, CONF_GRID_EXPORT_SENSOR,
+        CONF_BATTERY_DISCHARGE_SENSOR, CONF_GRID_EXPORT_SENSOR, CONF_GRID_POWER_ENTITY,
     )
     for field in measurement_fields:
         if field not in result:
@@ -276,6 +302,8 @@ def validate_configuration(
         if not isinstance(result[field], str) or not result[field] or len(result[field]) > 64:
             raise HomeAssistantError(f"{field} must be a short non-empty string")
     choices = {
+        CONF_PRICE_PROVIDER: {"auto", "ha_entity", "ha_tibber", "ha_nordpool", "nordpool_direct"},
+        CONF_PRICE_AREA: {"SE1", "SE2", "SE3", "SE4"},
         CONF_BATTERY_POWER_DIRECTION: {"auto", "positive_charging", "positive_discharging"},
         CONF_HOUSE_LOAD_DIRECTION: {"auto", "positive_consumption", "negative_consumption"},
         CONF_HOUSE_LOAD_SOURCE: {"auto", "house", "grid"},
@@ -329,5 +357,49 @@ def validate_configuration(
         raise HomeAssistantError("maximum target state of charge must exceed minimum")
     if fuse <= 0 or margin < 0 or margin >= fuse:
         raise HomeAssistantError("phase safety margin must be lower than the main fuse")
+    home = result.get(CONF_TIBBER_HOME, "")
+    if not isinstance(home, str) or len(home) > 128:
+        raise HomeAssistantError("tibber_home must be a home name or an empty string")
+    if CONF_CLIMATE_RULES in result:
+        result[CONF_CLIMATE_RULES] = validate_climate_rules(hass, result[CONF_CLIMATE_RULES])
     return result
+
+
+def validate_climate_rules(hass, rules) -> list[dict]:
+    """Validate each selected zone independently before any physical write is possible."""
+    if not isinstance(rules, list) or len(rules) > 40:
+        raise HomeAssistantError("climate_rules must be a list of at most 40 zones")
+    units = getattr(getattr(hass, "config", None), "units", None)
+    if rules and getattr(units, "temperature_unit", "°C") != "°C":
+        raise HomeAssistantError("Thermostat control currently requires Home Assistant units °C")
+    normalized, seen = [], set()
+    allowed = {"entity_id", "baseline", "max_deviation", "weight", "mode", "direction",
+               "heater_type", "scop", "max_power_w", "phase"}
+    for raw in rules:
+        if not isinstance(raw, dict) or set(raw) != allowed:
+            raise HomeAssistantError("Each climate rule needs a complete zone configuration")
+        rule = dict(raw)
+        entity_id = _entity_id(rule["entity_id"], "climate", "climate_rules")
+        _entity_exists(hass, entity_id, "climate_rules")
+        if entity_id in seen:
+            raise HomeAssistantError("climate_rules contains duplicate zones")
+        seen.add(entity_id)
+        for key, lower, upper in (
+            ("baseline", 14, 30), ("max_deviation", 0.2, 4), ("weight", 1, 10),
+            ("scop", 1, 7), ("max_power_w", 50, 50000),
+        ):
+            value = rule[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
+                math.isfinite(value) and lower <= value <= upper
+            ):
+                raise HomeAssistantError(f"Invalid climate {key} for {entity_id}")
+        options = {
+            "mode": {"scale", "peak"}, "direction": {"auto", "heat", "cool", "heat_cool"},
+            "phase": {"unknown", "L1", "L2", "L3", "3_phase"},
+            "heater_type": {"air_air", "air_water", "ground_source", "direct_electric"},
+        }
+        if any(rule[key] not in values for key, values in options.items()):
+            raise HomeAssistantError(f"Invalid climate strategy or equipment for {entity_id}")
+        normalized.append(rule)
+    return normalized
 

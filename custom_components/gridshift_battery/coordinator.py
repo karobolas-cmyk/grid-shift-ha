@@ -51,7 +51,6 @@ from .const import (
     CONF_PHASE_CURRENT_ENTITIES,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
-    CONF_PRICE_ENTITY,
     CONF_ROUND_TRIP_EFFICIENCY,
     CONF_SOC_ENTITY,
     CONF_SOLAR_PEAK_POWER_KWP,
@@ -63,6 +62,7 @@ from .const import (
     DOMAIN,
 )
 from .controller import BatteryController, LiveSafetyError, PowerReadbackError, RuntimeStorage
+from .measurements import power_snapshot, report_time
 from .models import Decision, OptimizerInput
 from .optimizer import optimize
 from .power import (
@@ -73,8 +73,9 @@ from .power import (
     house_power_inverted,
     observed_grid_charge_w,
 )
-from .price import parse_price_slots
+from .price_source import PriceSource
 from .safety import sensor_age_seconds, stale_sensor_ids
+from .thermal import ThermalController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,13 +105,44 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         self.config = merged_config(entry)
         self.storage = storage
         self.controller = controller
+        self.prices = PriceSource(hass, self.config, storage)
+        self.power_snapshot = {}
+        self.thermal = ThermalController(hass, self.config, storage)
+        self.thermal.phase_guard = self._guard_thermal_increase
+        self.thermal_task = None
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=self.config[CONF_INTERVAL_MINUTES]),
+            update_interval=timedelta(seconds=min(30, self.config[CONF_INTERVAL_MINUTES] * 60)),
         )
         self.controller.power_guard = self._guard_power_write
+
+    def _guard_thermal_increase(self, demand) -> bool:
+        """Read the latest phases before increasing a thermostat's demand."""
+        now = dt_util.now()
+        currents, _, stale = self._phase_currents(now)
+        reserved = self.thermal.phase_reservations(now)
+        pending_battery_a = 0.0
+        execution = getattr(self.controller, "execution", {})
+        if self.controller.enabled and execution.get("action") == "charge":
+            measured_battery = self.config.get(CONF_BATTERY_POWER_ENTITY) or (
+                self.config.get(CONF_BATTERY_CHARGE_SENSOR)
+                and self.config.get(CONF_BATTERY_DISCHARGE_SENSOR)
+            )
+            if not measured_battery:
+                return False
+            requested = (
+                execution.get("commanded_power_w") or execution.get("requested_power_w") or 0
+            )
+            pending_battery_a = max(0, requested - self._previous_grid_charge_w(now)) / (
+                self.config[CONF_NOMINAL_VOLTAGE_V] * 3
+            )
+        return not stale and all(
+            max(0.0, current) + reserve + extra + pending_battery_a <= self.config[CONF_MAIN_FUSE_A]
+            - self.config[CONF_PHASE_SAFETY_MARGIN_A]
+            for current, reserve, extra in zip(currents, reserved, demand, strict=True)
+        )
 
     def _guard_power_write(self, requested_w: int, action: str) -> int:
         """Recheck live safety after settling and before each rate-write attempt."""
@@ -126,11 +158,13 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         if action == "charge":
             if soc >= self.config[CONF_MAX_TARGET_SOC_PCT]:
                 raise LiveSafetyError("state_of_charge_limit before rate write")
+            reserves = self.thermal.phase_reservations(dt_util.now())
             headroom = min(
                 self.config[CONF_MAIN_FUSE_A]
                 - self.config[CONF_PHASE_SAFETY_MARGIN_A]
                 - max(0.0, current)
-                for current in currents
+                - reserve
+                for current, reserve in zip(currents, reserves, strict=True)
             )
             safe_w = max(
                 0.0,
@@ -156,7 +190,10 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 raise UpdateFailed(f"{entity_id} is unavailable")
             return default
         try:
-            return float(state.state)
+            value = float(state.state)
+            if not math.isfinite(value):
+                raise ValueError("not finite")
+            return value
         except ValueError as err:
             if default is not None:
                 return default
@@ -251,14 +288,14 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             stale_sensor_ids(
                 now,
                 (
-                    (entity_id, getattr(state, "last_updated", None))
+                    (entity_id, report_time(state))
                     for entity_id, state in states
                 ),
                 self.config[CONF_PHASE_SENSOR_MAX_AGE_SECONDS],
             )
         )
         ages = [
-            sensor_age_seconds(now, getattr(state, "last_updated", None))
+            sensor_age_seconds(now, report_time(state))
             for _, state in states
         ]
         currents: list[float] = []
@@ -302,39 +339,29 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             stale_phase_entities=stale_entities,
         )
 
-    async def _async_tibber_price_slots(self, now, horizon_end):
-        if not self.hass.services.has_service("tibber", "get_prices"):
-            return ()
-        try:
-            response = await self.hass.services.async_call(
-                "tibber",
-                "get_prices",
-                {"start": now.isoformat(), "end": horizon_end.isoformat()},
-                blocking=True,
-                return_response=True,
-            )
-        except Exception:
-            _LOGGER.debug("Could not fetch prices through tibber.get_prices", exc_info=True)
-            return ()
-        prices = []
-        for home_prices in (response or {}).get("prices", {}).values():
-            prices.extend(home_prices)
-        return parse_price_slots({"prices": prices}, now)
-
     async def _async_update_data(self) -> Decision:
         now = dt_util.now()
+        self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
+        if stale_phase_entities:
+            if self.thermal_task is None or self.thermal_task.done():
+                self.thermal_task = self.hass.async_create_task(
+                    self.thermal.async_evaluate((), now, currents, stale_phase_entities)
+                )
+            return await self._phase_data_failsafe(phase_data_age, stale_phase_entities)
+        slots = await self.prices.async_prices(now)
+        now = dt_util.now()
+        self.power_snapshot = power_snapshot(self.hass, self.config, now)
+        currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
+        if self.thermal_task is None or self.thermal_task.done():
+            self.thermal_task = self.hass.async_create_task(
+                self.thermal.async_evaluate(slots, now, currents, stale_phase_entities)
+            )
         if stale_phase_entities:
             return await self._phase_data_failsafe(
                 phase_data_age, stale_phase_entities
             )
-        price_state = self.hass.states.get(self.config[CONF_PRICE_ENTITY])
-        if price_state is None:
-            raise UpdateFailed("price entity is unavailable")
-        slots = parse_price_slots(price_state.attributes, now, price_state.state)
         horizon_end = now + timedelta(hours=self.config[CONF_HORIZON_HOURS])
-        if len(slots) < 2:
-            slots = await self._async_tibber_price_slots(now, horizon_end)
         slots = tuple(slot for slot in slots if slot.end > now and slot.start < horizon_end)
 
         house_id = self.config[CONF_HOUSE_LOAD_ENTITY]
@@ -391,7 +418,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             OptimizerInput(
                 now=now,
                 soc_pct=self._value(self.config[CONF_SOC_ENTITY]),
-                phase_currents_a=currents,  # type: ignore[arg-type]
+                phase_currents_a=tuple(
+                    current + reserve for current, reserve in zip(
+                        currents, self.thermal.phase_reservations(now), strict=True,
+                    )
+                ),  # type: ignore[arg-type]
                 price_slots=slots,
                 forecasts=forecasts,
                 battery_capacity_kwh=self.config[CONF_BATTERY_CAPACITY_KWH],
