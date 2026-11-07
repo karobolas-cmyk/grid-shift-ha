@@ -1,0 +1,22 @@
+apply_configuration:
+  name: Apply GridShift configuration
+  description: >-
+    Validates and stores an entity mapping submitted by the GridShift application.
+    Battery control remains disabled until its dedicated switch is enabled.
+  fields:
+    configuration:
+      name: Configuration
+      description: Validated GridShift entity mapping and safety limits.
+      required: true
+      example:
+        price_entity: sensor.electricity_price
+        soc_entity: sensor.battery_state_of_charge
+        house_load_entity: sensor.house_power
+        phase_current_entities:
+          - sensor.current_l1
+          - sensor.current_l2
+          - sensor.current_l3
+        control_mode_entity: select.storage_control_mode
+        charge_power_entity: number.grid_charge_power
+      selector:
+        object:

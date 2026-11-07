@@ -2,6 +2,17 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.10.0 - 2026-11-07
+
+- Added the narrowly scoped `gridshift_battery.apply_configuration` service used
+  by the GridShift application after the user reviews entity discovery.
+- Validate entity domains, existence, three unique phase sensors, Fronius mode
+  options, supported fields, types, and safety ranges before saving anything.
+- Disable active control before replacing a mapping, then reload the integration
+  so recommendation sensors and dedicated control switches become available.
+- Keep automatic battery control and discharge-to-grid disabled until their
+  dedicated switches are explicitly enabled.
+
 ## 0.9.1 - 2026-11-07
 
 - Replaced the entity-heavy Home Assistant setup wizard with a zero-input

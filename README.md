@@ -22,6 +22,13 @@ the integration again.
 The Home Assistant setup screen for a new bridge contains only a confirmation
 button; no battery, inverter, price, meter, or phase entity is required there.
 
+After reviewing the discovered entities in GridShift, **Configure bridge &
+import values** calls the integration's restricted `apply_configuration`
+service. The service accepts only GridShift's documented mapping and safety
+fields, validates them locally in Home Assistant, reloads the integration, and
+creates the dedicated control switches. It cannot proxy arbitrary Home
+Assistant service calls. Control remains off after configuration.
+
 The battery control path is native to
 [`callifo/fronius_modbus`](https://github.com/callifo/fronius_modbus). GridShift
 uses its `Storage Control Mode`, `Grid Charge Power`, and optional
