@@ -60,6 +60,7 @@ class OptimizerInput:
     cycle_cost: float
     previous_charge_power_w: int = 0
     discharge_enabled: bool = False
+    force_action: Literal["charge", "discharge", "idle"] | None = None
     winter_active: bool = False
     winter_solar_factor: float = 1.0
     outdoor_temperature_c: float | None = None

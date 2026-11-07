@@ -58,6 +58,7 @@ class GridShiftControlSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.runtime.controller.async_set_enabled(False)
+        await self.runtime.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
 

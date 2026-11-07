@@ -228,6 +228,37 @@ def optimize(data: OptimizerInput) -> Decision:
             )
         return Decision("idle", 0, reason, selected_slots=selected_slots, **base)
 
+    if data.force_action == "idle":
+        return Decision("idle", 0, "manual_force_idle", **base)
+    if data.force_action == "charge":
+        if data.soc_pct >= data.max_target_soc_pct:
+            return Decision("blocked", 0, "manual_force_charge_soc_limit", **base)
+        command = min(data.max_charge_power_w, phase_limit_w) // 10 * 10
+        if command < 100:
+            return Decision("blocked", 0, "phase_capacity_exhausted", **base)
+        return Decision("charge", command, "manual_force_charge", **base)
+    if data.force_action == "discharge":
+        if not data.discharge_enabled:
+            return Decision("blocked", 0, "grid_discharge_not_enabled", **base)
+        discharge_energy_kwh = data.battery_capacity_kwh * max(
+            0.0, data.soc_pct - data.min_soc_pct
+        ) / 100
+        energy_limit_w = int(
+            discharge_energy_kwh * 1000 / max(active.duration_hours, 0.001)
+        )
+        command = min(_balanced_discharge_limit(data), energy_limit_w) // 10 * 10
+        if command < 100:
+            return Decision(
+                "blocked", 0, "manual_force_discharge_soc_limit", **base
+            )
+        return Decision(
+            "discharge",
+            0,
+            "manual_force_discharge",
+            discharge_power_w=command,
+            **base,
+        )
+
     discharge_reserve_soc = max(data.min_soc_pct, adaptive_target)
     discharge_energy_kwh = data.battery_capacity_kwh * max(
         0.0, data.soc_pct - discharge_reserve_soc

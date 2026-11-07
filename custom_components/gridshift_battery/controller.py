@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -30,6 +31,8 @@ class PersistedState:
     enabled: bool = False
     owns_control: bool = False
     discharge_enabled: bool = False
+    forced_action: str | None = None
+    forced_until: str | None = None
 
 
 class RuntimeStorage:
@@ -42,6 +45,8 @@ class RuntimeStorage:
             enabled=bool(raw.get("enabled", False)),
             owns_control=bool(raw.get("owns_control", False)),
             discharge_enabled=bool(raw.get("discharge_enabled", False)),
+            forced_action=raw.get("forced_action"),
+            forced_until=raw.get("forced_until"),
         )
         self.model = ConsumptionModel.from_dict(raw.get("model"))
 
@@ -52,6 +57,8 @@ class RuntimeStorage:
                 "enabled": self.state.enabled,
                 "owns_control": self.state.owns_control,
                 "discharge_enabled": self.state.discharge_enabled,
+                "forced_action": self.state.forced_action,
+                "forced_until": self.state.forced_until,
                 "model": self.model.to_dict(),
             }
         )
@@ -78,17 +85,70 @@ class BatteryController:
         """Return whether profitable grid export is explicitly armed."""
         return self.storage.state.discharge_enabled
 
+    @property
+    def forced_action(self) -> str | None:
+        """Return the currently stored manual action."""
+        return self.storage.state.forced_action
+
+    @property
+    def forced_until(self) -> str | None:
+        """Return the stored expiry timestamp."""
+        return self.storage.state.forced_until
+
+    def _clear_force_state(self) -> None:
+        self.storage.state.forced_action = None
+        self.storage.state.forced_until = None
+
     async def async_set_enabled(self, enabled: bool) -> None:
         """Enable control, or safely hand control back to the inverter."""
         self.storage.state.enabled = enabled
         if not enabled:
+            self._clear_force_state()
             await self.async_release_control()
         await self.storage.async_save()
+
+    async def async_set_force_action(
+        self, action: str, duration_minutes: int
+    ) -> None:
+        """Persist a short manual action; safety remains inside the optimizer."""
+        if action not in {"charge", "discharge", "idle"}:
+            raise ValueError(f"Unsupported force action: {action}")
+        duration = max(1, min(15, int(duration_minutes)))
+        self.storage.state.forced_action = action
+        self.storage.state.forced_until = (
+            datetime.now(UTC) + timedelta(minutes=duration)
+        ).isoformat()
+        await self.storage.async_save()
+
+    async def async_clear_force_action(self) -> None:
+        """Clear a manual action and return the next cycle to the price plan."""
+        self._clear_force_state()
+        await self.storage.async_save()
+
+    async def async_active_force_action(self, now: datetime) -> str | None:
+        """Return an unexpired manual action, clearing stale state."""
+        action = self.storage.state.forced_action
+        until_text = self.storage.state.forced_until
+        if not action or not until_text:
+            return None
+        try:
+            until = datetime.fromisoformat(until_text)
+        except ValueError:
+            until = now
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+        if now.astimezone(UTC) >= until.astimezone(UTC):
+            self._clear_force_state()
+            await self.storage.async_save()
+            return None
+        return action
 
     async def async_set_discharge_enabled(self, enabled: bool) -> None:
         """Arm grid discharge, or return an active discharge to Auto."""
         if not enabled and self._mode() == self.config[CONF_DISCHARGE_MODE_OPTION]:
             await self.async_release_control()
+        if not enabled and self.storage.state.forced_action == "discharge":
+            self._clear_force_state()
         self.storage.state.discharge_enabled = enabled
         await self.storage.async_save()
 

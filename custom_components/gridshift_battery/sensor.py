@@ -160,6 +160,7 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
         description: GridShiftSensorDescription,
     ) -> None:
         super().__init__(runtime.coordinator)
+        self.runtime = runtime
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_has_entity_name = True
@@ -188,4 +189,6 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "expensive_reference": data.expensive_reference,
             "discharge_power_w": data.discharge_power_w,
             "stale_phase_entities": list(data.stale_phase_entities),
+            "forced_action": self.runtime.controller.forced_action,
+            "forced_until": self.runtime.controller.forced_until,
         }

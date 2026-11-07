@@ -48,6 +48,8 @@ class FakeStorage:
             enabled=True,
             owns_control=False,
             discharge_enabled=discharge_enabled,
+            forced_action=None,
+            forced_until=None,
         )
 
     async def async_save(self) -> None:
@@ -200,3 +202,17 @@ def test_disarming_grid_discharge_only_returns_to_auto() -> None:
         )
     ]
     assert actuator.discharge_enabled is False
+
+def test_force_action_is_stored_and_can_be_cleared() -> None:
+    actuator, _ = controller()
+
+    asyncio.run(actuator.async_set_force_action("charge", 5))
+
+    assert actuator.forced_action == "charge"
+    assert actuator.forced_until is not None
+
+    asyncio.run(actuator.async_clear_force_action())
+
+    assert actuator.forced_action is None
+    assert actuator.forced_until is None
+

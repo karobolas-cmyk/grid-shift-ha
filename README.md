@@ -332,3 +332,16 @@ discharge opt-in, and the mode-wait-power write order.
   work.
 
 See [architecture](docs/architecture.md) for module boundaries and safety rules.
+
+### Live quarter override
+
+The dashboard can call `gridshift_battery.force_action` with `charge`,
+`discharge`, or `idle` for up to 15 minutes. Home Assistant stores the
+override, immediately refreshes the optimizer, and still enforces phase-sensor
+freshness, fuse headroom, SoC limits, and the explicit grid-discharge opt-in.
+
+For Fronius, a charge or discharge action selects the corresponding storage
+control mode, waits the configured settle time (20 seconds by default), verifies
+that the mode-specific number entity is available, and only then writes power.
+Clearing the override or using `idle` returns the inverter to `Auto`.
+

@@ -8,8 +8,9 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 
 from .bridge import (
@@ -17,7 +18,15 @@ from .bridge import (
     SERVICE_APPLY_CONFIGURATION,
     validate_configuration,
 )
-from .const import DOMAIN, STORAGE_KEY_PREFIX, STORAGE_VERSION, is_configured
+from .const import (
+    CONF_PHASE_CURRENT_ENTITIES,
+    DOMAIN,
+    SERVICE_CLEAR_FORCE_ACTION,
+    SERVICE_FORCE_ACTION,
+    STORAGE_KEY_PREFIX,
+    STORAGE_VERSION,
+    is_configured,
+)
 from .controller import BatteryController, RuntimeStorage
 from .coordinator import GridShiftCoordinator, merged_config
 
@@ -50,12 +59,64 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             await runtime.controller.async_set_enabled(False)
         hass.config_entries.async_update_entry(entry, data=validated, options={})
 
+    async def async_force_action(call: ServiceCall) -> None:
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if len(entries) != 1:
+            raise HomeAssistantError("Exactly one configured GridShift entry is required")
+        runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(
+            entries[0].entry_id
+        )
+        if runtime is None or runtime.controller is None or runtime.coordinator is None:
+            raise HomeAssistantError("Configure the GridShift Bridge before using live control")
+        if not runtime.controller.enabled:
+            raise HomeAssistantError("Enable Automatic battery control first")
+        action = call.data["action"]
+        if action == "discharge" and not runtime.controller.discharge_enabled:
+            raise HomeAssistantError("Enable Allow discharge to grid first")
+        await runtime.controller.async_set_force_action(
+            action, call.data["duration_minutes"]
+        )
+        await runtime.coordinator.async_request_refresh()
+
+    async def async_clear_force_action(call: ServiceCall) -> None:
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if len(entries) != 1:
+            raise HomeAssistantError("Exactly one configured GridShift entry is required")
+        runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(
+            entries[0].entry_id
+        )
+        if runtime is None or runtime.controller is None or runtime.coordinator is None:
+            raise HomeAssistantError("Configure the GridShift Bridge before using live control")
+        await runtime.controller.async_clear_force_action()
+        await runtime.coordinator.async_request_refresh()
+
     if not hass.services.has_service(DOMAIN, SERVICE_APPLY_CONFIGURATION):
         hass.services.async_register(
             DOMAIN,
             SERVICE_APPLY_CONFIGURATION,
             async_apply_configuration,
             schema=vol.Schema({vol.Required(ATTR_CONFIGURATION): dict}),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_FORCE_ACTION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_FORCE_ACTION,
+            async_force_action,
+            schema=vol.Schema(
+                {
+                    vol.Required("action"): vol.In(["charge", "discharge", "idle"]),
+                    vol.Required("duration_minutes"): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=15)
+                    ),
+                }
+            ),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_FORCE_ACTION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAR_FORCE_ACTION,
+            async_clear_force_action,
+            schema=vol.Schema({}),
         )
     return True
 
@@ -75,6 +136,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GridShiftCoordinator(hass, entry, storage, controller)
     runtime = GridShiftRuntime(coordinator, controller, storage, True)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+
+    @callback
+    def async_phase_sensor_changed(event: Event) -> None:
+        """Re-evaluate immediately when stale or loaded phase data changes."""
+        hass.async_create_task(coordinator.async_request_refresh())
+
+    entry.async_on_unload(
+        async_track_state_change_event(
+            hass,
+            controller.config[CONF_PHASE_CURRENT_ENTITIES],
+            async_phase_sensor_changed,
+        )
+    )
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 DOMAIN = "gridshift_battery"
+SERVICE_FORCE_ACTION = "force_action"
+SERVICE_CLEAR_FORCE_ACTION = "clear_force_action"
 
 CONF_PRICE_ENTITY = "price_entity"
 CONF_SOC_ENTITY = "soc_entity"
