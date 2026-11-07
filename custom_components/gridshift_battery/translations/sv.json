@@ -3,14 +3,9 @@
   "config": {
     "step": {
       "user": {
-        "title": "Fronius batteristyrning",
-        "description": "Välj entiteter som skapats av callifo/fronius_modbus.",
-        "data": {
-          "soc_entity": "Batteriets laddnivå",
-          "control_mode_entity": "Lagringens styrläge",
-          "charge_power_entity": "Laddeffekt från elnätet",
-          "discharge_power_entity": "Urladdningseffekt till elnätet (valfri)"
-        }
+        "title": "Anslut GridShift",
+        "description": "Detta skapar en lokal GridShift-brygga. Inga entiteter väljs i Home Assistant. Anslut hemmet från GridShift för att hitta, granska och konfigurera energientiteterna.",
+        "data": {}
       },
       "energy_sources": {
         "title": "Energiintegrationer",
@@ -126,6 +121,9 @@
       "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
       "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
       "required_control_modes_missing": "Den valda lagringsstyrningen saknar något av de konfigurerade GridShift-lägena."
+    },
+    "abort": {
+      "configure_in_gridshift": "Den här bryggan konfigureras från GridShift. Anslut Home Assistant i GridShift-appen för att hitta och mappa entiteter."
     }
   }
 }
