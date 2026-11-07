@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from math import isfinite
@@ -30,10 +31,17 @@ _LOGGER = logging.getLogger(__name__)
 POWER_READBACK_TIMEOUT_SECONDS = 30.0
 POWER_READBACK_POLL_SECONDS = 0.5
 POWER_READBACK_TOLERANCE_W = 5.0
+POWER_ENTITY_TIMEOUT_SECONDS = 60.0
+POWER_WRITE_MAX_ATTEMPTS = 3
+POWER_WRITE_RETRY_SECONDS = 5.0
 
 
 class PowerReadbackError(RuntimeError):
     """The requested setpoint was not observed after a successful service call."""
+
+
+class LiveSafetyError(RuntimeError):
+    """Fresh safety inputs temporarily forbid a power command."""
 
 
 @dataclass(slots=True)
@@ -46,6 +54,7 @@ class PersistedState:
     forced_action: str | None = None
     forced_until: str | None = None
     plan_overrides: dict[str, str] = field(default_factory=dict)
+    control_fault: dict[str, Any] = field(default_factory=dict)
 
 
 class RuntimeStorage:
@@ -61,7 +70,10 @@ class RuntimeStorage:
             forced_action=raw.get("forced_action"),
             forced_until=raw.get("forced_until"),
             plan_overrides=dict(raw.get("plan_overrides") or {}),
+            control_fault=dict(raw.get("control_fault") or {}),
         )
+        if self.state.control_fault:
+            self.state.enabled = False
         self.model = ConsumptionModel.from_dict(raw.get("model"))
 
     async def async_save(self) -> None:
@@ -74,6 +86,7 @@ class RuntimeStorage:
                 "forced_action": self.state.forced_action,
                 "forced_until": self.state.forced_until,
                 "plan_overrides": self.state.plan_overrides,
+                "control_fault": self.state.control_fault,
                 "model": self.model.to_dict(),
             }
         )
@@ -90,12 +103,25 @@ class BatteryController:
         self.storage = storage
         self.last_power_w = 0
         self.last_discharge_power_w = 0
-        self.execution: dict[str, Any] = {}
+        self.execution: dict[str, Any] = dict(
+            storage.state.control_fault.get("execution") or {}
+        )
         self._apply_lock = asyncio.Lock()
+        self.power_guard: Callable[[int, str], int] | None = None
 
     @property
     def enabled(self) -> bool:
         return self.storage.state.enabled
+
+    @property
+    def pause_reason(self) -> str | None:
+        """Return the latched write fault, cleared only by explicit re-enabling."""
+        return self.storage.state.control_fault.get("reason")
+
+    @property
+    def pause_error(self) -> str | None:
+        """Return the original write error while control is paused."""
+        return self.storage.state.control_fault.get("error")
 
     @property
     def discharge_enabled(self) -> bool:
@@ -129,6 +155,8 @@ class BatteryController:
     async def async_set_enabled(self, enabled: bool) -> None:
         """Enable control, or safely hand control back to the inverter."""
         self.storage.state.enabled = enabled
+        if enabled:
+            self.storage.state.control_fault = {}
         if not enabled:
             self._clear_force_state()
             await self.async_release_control()
@@ -243,8 +271,64 @@ class BatteryController:
         )
 
     async def _set_power(self, entity_id: str, power_w: int) -> int:
-        rounded = int(power_w) // 10 * 10
+        """Retry a transient rate failure without toggling the storage mode."""
+        self.execution["write_attempts"] = []
+        for attempt in range(1, POWER_WRITE_MAX_ATTEMPTS + 1):
+            self.execution["write_attempt"] = attempt
+            try:
+                return await self._set_power_once(entity_id, power_w)
+            except Exception as err:
+                self.execution["write_attempts"].append(
+                    {
+                        "attempt": attempt,
+                        "stage": self.execution["stage"],
+                        "at": datetime.now(UTC).isoformat(),
+                        "error": f"{type(err).__name__}: {err}",
+                        "readback_power_w": self.execution.get("readback_power_w"),
+                    }
+                )
+                transient = isinstance(err, PowerReadbackError) or any(
+                    phrase in str(err).lower()
+                    for phrase in (
+                        "unavailable", "not available", "not ready", "busy",
+                        "temporar", "timeout", "timed out", "current storage mode",
+                        "can only be changed in",
+                    )
+                )
+                if (
+                    attempt >= POWER_WRITE_MAX_ATTEMPTS
+                    or not transient
+                    or not self.enabled
+                    or self._mode() != self.execution["requested_mode"]
+                ):
+                    raise
+                _LOGGER.warning(
+                    "Retrying power write %s on %s, attempt %s/%s: %s",
+                    self.execution["command_id"], entity_id,
+                    attempt + 1, POWER_WRITE_MAX_ATTEMPTS, err,
+                )
+                self.execution["stage"] = "retry_power_write"
+                await asyncio.sleep(POWER_WRITE_RETRY_SECONDS)
+                if not self.enabled or self._mode() != self.execution["requested_mode"]:
+                    raise RuntimeError("Control was disabled or Fronius mode changed during retry")
+                await self._wait_for_power_entity(entity_id, self.execution["requested_mode"])
+        raise RuntimeError("Power write attempts exhausted")
+
+    async def _set_power_once(self, entity_id: str, power_w: int) -> int:
+        self.execution.update(
+            stage="check_live_safety", service_call_succeeded=False,
+            power_write_confirmed=False,
+        )
+        if not self.enabled or self._mode() != self.execution["requested_mode"]:
+            raise RuntimeError("Control was disabled or Fronius mode changed before rate write")
+        guarded = (
+            self.power_guard(power_w, self.execution["action"])
+            if self.power_guard else power_w
+        )
+        rounded = int(guarded) // 10 * 10
         started = datetime.now(UTC)
+        entity_state = self.hass.states.get(entity_id)
+        attributes = getattr(entity_state, "attributes", {})
         self.execution.update(
             stage="write_power",
             power_entity=entity_id,
@@ -252,6 +336,10 @@ class BatteryController:
             previous_power_w=self._read_power(entity_id),
             write_started_at=started.isoformat(),
             service_call_succeeded=False,
+            entity_min=attributes.get("min"),
+            entity_max=attributes.get("max"),
+            entity_step=attributes.get("step"),
+            entity_unit=attributes.get("unit_of_measurement"),
         )
         await self.hass.services.async_call(
             "number",
@@ -314,23 +402,35 @@ class BatteryController:
         if self._mode() != mode:
             self.execution["stage"] = "select_mode"
             await self._set_mode(mode)
+            self.execution["mode_selected_at"] = datetime.now(UTC).isoformat()
             self.execution["stage"] = "settle_mode"
             await asyncio.sleep(max(0, float(self.config[CONF_MODE_SETTLE_SECONDS])))
+        else:
+            state = self.hass.states.get(self.config[CONF_CONTROL_MODE_ENTITY])
+            changed_at = getattr(state, "last_changed", None)
+            if isinstance(changed_at, datetime):
+                age = max(0.0, (datetime.now(UTC) - changed_at).total_seconds())
+                remaining = max(0.0, float(self.config[CONF_MODE_SETTLE_SECONDS]) - age)
+                if remaining:
+                    self.execution["stage"] = "settle_mode"
+                    await asyncio.sleep(remaining)
         if not self.enabled:
             raise RuntimeError("Control was disabled or Fronius mode changed before power write")
         if self._mode() != mode:
             raise RuntimeError(f"Fronius storage mode did not settle to {mode}")
+        self.execution["mode_confirmed_at"] = datetime.now(UTC).isoformat()
 
     async def _wait_for_power_entity(self, entity_id: str, mode: str) -> None:
         """Wait for a mode-specific Fronius number to become writable."""
         poll_seconds = 0.5
-        timeout_seconds = max(
-            poll_seconds, float(self.config[CONF_MODE_SETTLE_SECONDS])
-        )
+        timeout_seconds = max(poll_seconds, POWER_ENTITY_TIMEOUT_SECONDS)
         attempts = max(1, int(timeout_seconds / poll_seconds))
         for attempt in range(attempts + 1):
+            if not self.enabled or self._mode() != mode:
+                raise RuntimeError("Control was disabled or Fronius mode changed while waiting")
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in ("unknown", "unavailable"):
+                self.execution["power_entity_ready_at"] = datetime.now(UTC).isoformat()
                 return
             if attempt < attempts:
                 await asyncio.sleep(poll_seconds)
@@ -355,7 +455,7 @@ class BatteryController:
     async def _async_apply_serialized(self, decision: Decision) -> str | None:
         """Keep mode, power write and acknowledgement in one serialized attempt."""
         if not self.enabled:
-            return None
+            return self.pause_reason
 
         requested_modes = {
             "charge": self.config[CONF_CHARGE_MODE_OPTION],
@@ -373,6 +473,10 @@ class BatteryController:
                 if decision.action == "discharge"
                 else decision.charge_power_w
             ),
+            "power_entity": self.config.get(
+                CONF_DISCHARGE_POWER_ENTITY
+                if decision.action == "discharge" else CONF_CHARGE_POWER_ENTITY
+            ),
             "status": "pending",
             "stage": "check_mode",
             "started_at": datetime.now(UTC).isoformat(),
@@ -386,20 +490,58 @@ class BatteryController:
                 failed_stage=self.execution["stage"],
                 error=f"{type(err).__name__}: {err}",
             )
-            # A mode transition may have restored an old non-zero rate. Return
-            # to Auto if this attempt did not confirm its own power command.
-            if self._mode() == self.execution["requested_mode"] and decision.action in {
-                "charge", "discharge", "hold"
-            }:
+            was_enabled = self.enabled
+            should_pause = was_enabled and not isinstance(err, LiveSafetyError)
+            entity_id = self.config.get(
+                CONF_DISCHARGE_POWER_ENTITY
+                if decision.action == "discharge" else CONF_CHARGE_POWER_ENTITY
+            )
+            state = self.hass.states.get(entity_id) if entity_id else None
+            reported_at = (
+                getattr(state, "last_reported", None)
+                or getattr(state, "last_updated", None)
+            )
+            started_at = datetime.fromisoformat(self.execution["started_at"])
+            observed_power = self._read_power(entity_id) if entity_id else None
+            fresh_zero = (
+                decision.action in {"charge", "discharge"}
+                and observed_power == 0
+                and isinstance(reported_at, datetime)
+                and reported_at >= started_at
+            )
+            self.execution["failure_observed_power_w"] = observed_power
+            if fresh_zero and self._mode() == self.execution["requested_mode"]:
+                self.execution["fallback_action"] = "retain_verified_zero_mode"
+                self.execution["fallback_mode"] = self._mode()
+                self.storage.state.owns_control = False
+                self.last_power_w = 0
+                self.last_discharge_power_w = 0
+            elif was_enabled and self._mode() == self.execution["requested_mode"]:
                 try:
                     await self.async_release_control()
                     self.execution["fallback_mode"] = self._mode()
+                    self.execution["fallback_action"] = "release_unknown_or_nonzero_power_once"
                 except Exception as release_err:
                     self.execution["fallback_error"] = (
                         f"{type(release_err).__name__}: {release_err}"
                     )
                     _LOGGER.exception("Could not return Fronius to Auto after an unverified write")
             self.execution["finished_at"] = datetime.now(UTC).isoformat()
+            if should_pause:
+                # Stop all automatic retries, including after a restart. A fresh
+                # input update must not immediately restart the failed sequence.
+                self.storage.state.enabled = False
+                self._clear_force_state()
+                self.execution["paused"] = True
+                self.storage.state.control_fault = {
+                    "reason": "control_paused_after_write_failure",
+                    "error": self.execution["error"],
+                    "execution": dict(self.execution),
+                }
+                try:
+                    await self.storage.async_save()
+                except Exception:
+                    _LOGGER.exception("Could not persist the paused GridShift controller")
             raise
         self.execution.update(
             status="refused" if override else "confirmed",
@@ -418,6 +560,18 @@ class BatteryController:
 
     async def _async_apply_decision(self, decision: Decision) -> str | None:
         """Execute one attempt; only verified rates update the command history."""
+
+        charge_entity = self.config[CONF_CHARGE_POWER_ENTITY]
+        discharge_entity_id = self.config.get(CONF_DISCHARGE_POWER_ENTITY) or ""
+        if (
+            charge_entity == discharge_entity_id
+            or "grid_discharge_power" in charge_entity.lower()
+            or "grid_charge_power" in discharge_entity_id.lower()
+        ):
+            raise RuntimeError(
+                f"invalid_power_entity_mapping: charge={charge_entity}, "
+                f"discharge={discharge_entity_id}; review Grid charge power mapping"
+            )
 
         auto = self.config[CONF_AUTO_MODE_OPTION]
         charging = self.config[CONF_CHARGE_MODE_OPTION]
