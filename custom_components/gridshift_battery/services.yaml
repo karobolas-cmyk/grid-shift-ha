@@ -20,3 +20,34 @@ apply_configuration:
         charge_power_entity: number.grid_charge_power
       selector:
         object:
+
+force_action:
+  name: Force battery action
+  description: >-
+    Overrides the price plan for a short period. Live phase freshness, fuse
+    headroom, state-of-charge limits, and the discharge opt-in still apply.
+  fields:
+    action:
+      name: Action
+      required: true
+      selector:
+        select:
+          options:
+            - charge
+            - discharge
+            - idle
+    duration_minutes:
+      name: Duration
+      description: Minutes before the automatic plan resumes.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 15
+          step: 1
+          unit_of_measurement: min
+
+clear_force_action:
+  name: Return to automatic plan
+  description: Clears the active manual battery action and refreshes the optimizer.
+
