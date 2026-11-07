@@ -193,6 +193,40 @@ def test_hold_requires_phase_margin_for_lost_battery_support() -> None:
     )
     assert decision.action != "hold"
 
+def test_manual_force_charge_does_not_require_price_forecast() -> None:
+    decision = optimize(
+        replace(
+            scenario(prices=[], currents=(7, 18, 4)),
+            force_action="charge",
+        )
+    )
+
+    assert decision.action == "charge"
+    assert decision.reason == "manual_force_charge"
+    assert decision.charge_power_w == 690
+
+
+def test_manual_force_idle_does_not_require_price_forecast() -> None:
+    decision = optimize(replace(scenario(prices=[]), force_action="idle"))
+
+    assert decision.action == "idle"
+    assert decision.reason == "manual_force_idle"
+
+
+def test_manual_force_discharge_does_not_require_price_forecast() -> None:
+    decision = optimize(
+        replace(
+            scenario(prices=[], soc=50),
+            force_action="discharge",
+            discharge_enabled=True,
+        )
+    )
+
+    assert decision.action == "discharge"
+    assert decision.reason == "manual_force_discharge"
+    assert decision.discharge_power_w == 5000
+
+
 def test_manual_force_charge_overrides_expensive_price_but_keeps_phase_limit() -> None:
     data = replace(
         scenario(prices=[2.0, 0.3, 0.4, 0.8], currents=(7, 18, 4)),
