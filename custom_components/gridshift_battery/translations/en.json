@@ -61,6 +61,7 @@
           "heating_reserve_kw_per_c": "Heating reserve per degree",
           "charge_mode_option": "Fronius charge mode option",
           "discharge_mode_option": "Fronius discharge mode option",
+          "block_discharge_mode_option": "Fronius block-discharge mode option",
           "auto_mode_option": "Fronius automatic mode option",
           "mode_settle_seconds": "Wait after changing Fronius mode"
         }
@@ -73,7 +74,7 @@
       "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
       "invalid_energy_selection": "The energy mapping could not be read. Review the selected entities and try again.",
       "configuration_step_failed": "The next settings page could not be opened. Check the Home Assistant log for the detailed GridShift error.",
-      "required_control_modes_missing": "The selected storage-control entity does not expose Auto, Charge from Grid, and the configured optional Discharge to Grid mode."
+      "required_control_modes_missing": "The selected storage-control entity must expose Auto, Charge from Grid, Block Discharging, and the configured optional Discharge to Grid mode."
     },
     "abort": {
       "already_configured": "This Fronius battery is already configured."
@@ -112,6 +113,7 @@
           "heating_reserve_kw_per_c": "Heating reserve per degree",
           "charge_mode_option": "Fronius charge mode option",
           "discharge_mode_option": "Fronius discharge mode option",
+          "block_discharge_mode_option": "Fronius block-discharge mode option",
           "auto_mode_option": "Fronius automatic mode option",
           "mode_settle_seconds": "Wait after changing Fronius mode"
         }
