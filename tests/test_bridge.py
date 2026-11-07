@@ -3,7 +3,10 @@ from types import SimpleNamespace
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.gridshift_battery.bridge import validate_configuration
+from custom_components.gridshift_battery.bridge import (
+    validate_climate_rules,
+    validate_configuration,
+)
 from custom_components.gridshift_battery.const import (
     CONF_BATTERY_CHARGE_SENSOR,
     CONF_BATTERY_DISCHARGE_SENSOR,
@@ -162,4 +165,26 @@ def test_bridge_rejects_unsupported_polarity() -> None:
     configuration = {**valid_configuration(), "battery_power_direction": "guess"}
     with pytest.raises(HomeAssistantError, match="unsupported battery_power_direction"):
         validate_configuration(hass, configuration)
+
+
+def test_direct_price_provider_does_not_need_an_ha_price_entity() -> None:
+    config = {**valid_configuration(), "price_provider": "nordpool_direct", "price_area": "SE3"}
+    del config[CONF_PRICE_ENTITY]
+    assert validate_configuration(SimpleNamespace(states=States()), config) == config
+
+
+def test_thermostat_configuration_rejects_unbounded_or_unknown_targets() -> None:
+    states = States()
+    states.values["climate.room"] = SimpleNamespace(state="heat", attributes={})
+    hass = SimpleNamespace(states=states)
+    rule = {"entity_id": "climate.room", "baseline": 21, "max_deviation": 1, "weight": 6,
+            "mode": "scale", "direction": "auto", "heater_type": "air_air", "scop": 3.5,
+            "max_power_w": 1500, "phase": "unknown"}
+    assert validate_climate_rules(hass, [rule]) == [rule]
+    with pytest.raises(HomeAssistantError, match="Invalid climate max_deviation"):
+        validate_climate_rules(hass, [{**rule, "max_deviation": 10}])
+    with pytest.raises(HomeAssistantError, match="complete zone configuration"):
+        validate_climate_rules(hass, [{**rule, "extra_service": "turn_on"}])
+    with pytest.raises(HomeAssistantError, match="must be a climate entity"):
+        validate_climate_rules(hass, [{**rule, "entity_id": "light.room"}])
 

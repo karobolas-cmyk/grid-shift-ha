@@ -12,6 +12,7 @@ from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .bridge import (
     ATTR_CONFIGURATION,
@@ -25,6 +26,7 @@ from .const import (
     CONF_EV_POWER_ENTITIES,
     CONF_EV_POWER_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_GRID_POWER_ENTITY,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
@@ -32,6 +34,7 @@ from .const import (
     CONF_SOC_ENTITY,
     CONF_SOLAR_POWER_ENTITIES,
     CONF_SOLAR_POWER_ENTITY,
+    CONF_WEATHER_ENTITY,
     DOMAIN,
     SERVICE_CLEAR_FORCE_ACTION,
     SERVICE_FORCE_ACTION,
@@ -71,6 +74,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if runtime and runtime.controller and runtime.controller.enabled:
             await runtime.controller.async_set_enabled(False)
+        if runtime and runtime.coordinator and runtime.coordinator.thermal.enabled:
+            await runtime.coordinator.thermal.async_set_enabled(False, dt_util.now())
         source_fields = {
             "house_load_entity", "house_load_source", "house_load_direction",
             "house_load_is_grid_power", "battery_power_entity", "battery_power_direction",
@@ -182,12 +187,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     watched_entities = {
-        controller.config[CONF_PRICE_ENTITY],
         controller.config[CONF_SOC_ENTITY],
         controller.config[CONF_HOUSE_LOAD_ENTITY],
         *controller.config[CONF_PHASE_CURRENT_ENTITIES],
     }
     for key in (
+        CONF_PRICE_ENTITY,
+        CONF_GRID_POWER_ENTITY,
+        CONF_WEATHER_ENTITY,
         CONF_BATTERY_POWER_ENTITY,
         CONF_BATTERY_CHARGE_SENSOR,
         CONF_BATTERY_DISCHARGE_SENSOR,
@@ -203,6 +210,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             watched_entities.add(value)
         elif isinstance(value, (list, tuple)):
             watched_entities.update(item for item in value if isinstance(item, str))
+    watched_entities.update(rule["entity_id"] for rule in controller.config["climate_rules"])
 
     @callback
     def async_input_sensor_changed(event: Event) -> None:
@@ -235,6 +243,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload and safely relinquish battery control."""
     runtime: GridShiftRuntime = hass.data[DOMAIN][entry.entry_id]
+    if runtime.coordinator is not None:
+        if runtime.coordinator.thermal_task:
+            await runtime.coordinator.thermal_task
+        await runtime.coordinator.thermal.async_release(dt_util.now())
     if runtime.controller is not None and runtime.controller.enabled:
         await runtime.controller.async_release_control()
         await runtime.storage.async_save()

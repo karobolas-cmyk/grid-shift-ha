@@ -1,43 +1,45 @@
-# Thermal control model
+# Native thermostat control
 
-The thermal model treats every `climate` entity as a separate zone. The hosted
-hosted preview is read-only; this document defines the safety contract required before
-physical climate control is added to the Home Assistant integration.
+Thermostat control is an independent opt-in. Configure zones from GridShift, save
+the configuration to Home Assistant and enable **Automatic climate control**.
+It runs locally in HA after the browser closes. No thermostat is armed by a
+battery-control switch or by installing/updating the integration.
 
-## Zone configuration
+Each selected zone has an explicit baseline, maximum deviation, price response
+(1–10), continuous/peak-only strategy and HVAC direction. Configure its rated
+electrical power and supply phase. An unknown phase reserves the entire load on
+every phase conservatively. The first release requires HA temperature units °C.
 
-Every selected zone has explicit settings:
+The native controller ranks published electricity prices against approximate
+temperature-dependent COP. Hourly HA weather forecasts are used where available;
+fresh outdoor measurements are a fallback. Generic heat-pump COP estimates are
+not manufacturer performance curves. The dashboard's whole-house thermal-mass
+illustration is an estimate; native per-zone targets and readback are shown
+separately and do not claim measured energy savings.
 
-- **Baseline:** normal setpoint without price pressure, for example 22.0 °C.
-- **Maximum deviation:** largest allowed distance from the baseline.
-- **Price response 1–10:** how much of the maximum deviation may be used.
-- **Price strategy:** continuous scale or only the most expensive intervals.
-- **HVAC direction:** automatic detection or explicit `heat`, `cool`, or
-  `heat_cool`.
+Only selected `climate.*` entities can be written. Heating lowers targets at
+expensive prices; cooling raises them. Targets remain inside baseline ± deviation
+and the device's minimum/maximum. `heat_cool` uses a neutral band. HVAC modes are
+never changed and `off`, `fan_only`, unknown and incompatible modes are preserved.
+Hydronic cooling does not pre-cool without dew-point protection; it can only use
+a price setback. Auxiliary heat, defrost and compressor protection remain with
+the device's own controller.
 
-Without an active price or preheating signal, the recommendation returns exactly
-to the baseline. `heat` lowers the setpoint during expensive intervals, `cool`
-raises it, and `heat_cool` widens the range symmetrically around the baseline.
-`off`, `fan_only`, and unknown modes are left unchanged.
+There is at least five minutes between target writes across the entire home.
+Matching targets are not rewritten. Increasing thermal demand requires fresh
+phase data and room for the zone's full configured load. A temporary 15-minute
+phase reservation is also subtracted from the battery's live charge budget.
+This is conservative and can defer otherwise feasible heating or battery charge.
 
-## Safety requirements before physical control
+Service success is followed by target readback. An unmatched target is shown as
+awaiting readback, then unconfirmed; the controller does not claim it was applied
+or repeatedly overwrite it. A subsequent manual/other-automation change after a
+confirmed command relinquishes ownership and pauses that zone for two hours.
 
-1. Only explicitly selected entity IDs may be action targets.
-2. Baseline and maximum deviation must be checked in both the planner and just
-   before each Home Assistant action.
-3. Missing or stale price, weather, indoor-temperature, or HVAC data must return
-   to the baseline/fallback, never an aggressive temperature change.
-4. Setpoint changes need a deadband, maximum rate of change, and minimum run/stop
-   times to avoid short cycling.
-5. Cooling needs humidity and dew-point limits to avoid condensation risk.
-6. Auxiliary heat, defrost cycles, and unit-specific COP curves must be modeled
-   separately from nominal SCOP.
-7. Thermal demand must share the same phase forecast as the battery and EV before
-   multiple loads are allowed to start together.
+Missing prices or weather return an owned target to its baseline. Stale indoor
+or inactive HVAC data prevents a new write. On disable, reconfiguration or unload,
+the previous target is restored only if it still matches GridShift's last command;
+manual changes are preserved. Failed/unconfirmed restoration remains visible.
 
-## Next model step
-
-A single baseline is sufficient for the first preview. Later, the active baseline
-should come from a schedule or a Home Assistant state such as home, night, away,
-or vacation. The user's schedule remains the primary signal; price optimization
-may only make a bounded deviation from that active baseline.
+Future work: scheduled baselines for away/night, manufacturer COP maps, humidity
+and dew-point control, and explicitly measured thermal energy savings.

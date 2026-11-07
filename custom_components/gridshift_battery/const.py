@@ -29,6 +29,18 @@ CONF_CONTROL_MODE_ENTITY = "control_mode_entity"
 CONF_CHARGE_POWER_ENTITY = "charge_power_entity"
 CONF_DISCHARGE_POWER_ENTITY = "discharge_power_entity"
 CONF_PRICE_PROVIDER = "price_provider"
+CONF_PRICE_AREA = "price_area"
+CONF_PRICE_VAT = "price_vat_percent"
+CONF_PRICE_MARKUP = "price_markup_ore_kwh"
+CONF_TIBBER_HOME = "tibber_home"
+CONF_WEATHER_ENTITY = "weather_entity"
+CONF_CLIMATE_RULES = "climate_rules"
+CONF_THERMAL_MASS = "thermal_mass_kwh_c"
+CONF_THERMAL_LOSS = "thermal_heat_loss_kw_c"
+CONF_THERMAL_MAX_AGE = "thermal_sensor_max_age_seconds"
+CONF_THERMAL_INTERVAL = "thermal_min_interval_seconds"
+CONF_THERMAL_MANUAL_HOLD = "thermal_manual_hold_minutes"
+CONF_GRID_POWER_ENTITY = "grid_power_entity"
 CONF_METER_PROVIDER = "meter_provider"
 CONF_SOLAR_PROVIDER = "solar_provider"
 CONF_EV_PROVIDER = "ev_provider"
@@ -68,6 +80,17 @@ CONF_CAPACITY_TARIFF_START_HOUR = "capacity_tariff_start_hour"
 CONF_CAPACITY_TARIFF_END_HOUR = "capacity_tariff_end_hour"
 
 DEFAULTS = {
+    CONF_PRICE_PROVIDER: "auto",
+    CONF_PRICE_AREA: "SE3",
+    CONF_PRICE_VAT: 25.0,
+    CONF_PRICE_MARKUP: 0.0,
+    CONF_TIBBER_HOME: "",
+    CONF_CLIMATE_RULES: [],
+    CONF_THERMAL_MASS: 18.0,
+    CONF_THERMAL_LOSS: 0.28,
+    CONF_THERMAL_MAX_AGE: 1800,
+    CONF_THERMAL_INTERVAL: 300,
+    CONF_THERMAL_MANUAL_HOLD: 120,
     CONF_HOUSE_LOAD_SOURCE: "auto",
     CONF_HOUSE_LOAD_DIRECTION: "auto",
     CONF_BATTERY_POWER_DIRECTION: "auto",
@@ -126,5 +149,8 @@ REQUIRED_CONFIGURATION_KEYS = frozenset(
 
 def is_configured(data: dict) -> bool:
     """Return whether an entry contains the minimum runnable mapping."""
-    return REQUIRED_CONFIGURATION_KEYS.issubset(data)
+    required = REQUIRED_CONFIGURATION_KEYS
+    if data.get(CONF_PRICE_PROVIDER) in {"nordpool_direct", "ha_tibber", "ha_nordpool"}:
+        required = required - {CONF_PRICE_ENTITY}
+    return required.issubset(data)
 

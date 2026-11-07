@@ -152,7 +152,9 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
     """Expose one field from the latest optimizer decision."""
 
     entity_description: GridShiftSensorDescription
-    _unrecorded_attributes = frozenset({"plan", "control_execution"})
+    _unrecorded_attributes = frozenset({
+        "plan", "control_execution", "market_prices", "power_snapshot", "thermal_control",
+    })
 
     def __init__(
         self,
@@ -207,5 +209,8 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "phase_limit_w": data.phase_limit_w,
             "phase_headroom_a": data.phase_headroom_a,
             "power_sources": getattr(self.coordinator, "power_sources", {}),
+            "power_snapshot": self.coordinator.power_snapshot,
+            "market_prices": self.coordinator.prices.snapshot,
+            "thermal_control": self.coordinator.thermal.snapshot,
         }
 
