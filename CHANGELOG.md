@@ -2,6 +2,14 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.2 - 2026-11-07
+
+- Allow explicit manual charge, idle, and discharge actions when the automatic
+  price forecast is unavailable.
+- Keep state-of-charge limits, phase headroom, discharge opt-in, and the Fronius
+  mode/write safety sequence active for every forced action.
+- Add regression tests for force actions without price slots.
+
 ## 0.10.0 - 2026-11-07
 
 - Added the narrowly scoped `gridshift_battery.apply_configuration` service used
