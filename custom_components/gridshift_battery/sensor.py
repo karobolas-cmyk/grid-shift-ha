@@ -191,4 +191,8 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "stale_phase_entities": list(data.stale_phase_entities),
             "forced_action": self.runtime.controller.forced_action,
             "forced_until": self.runtime.controller.forced_until,
+            "control_enabled": self.runtime.controller.enabled,
+            "storage_control_mode": self.runtime.controller.current_mode,
+            "last_charge_power_w": self.runtime.controller.last_power_w,
+            "last_discharge_power_w": self.runtime.controller.last_discharge_power_w,
         }
