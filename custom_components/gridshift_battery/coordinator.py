@@ -248,6 +248,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 phase_data_age, stale_phase_entities
             )
 
+        force_action = await self.controller.async_active_force_action(now)
         decision = optimize(
             OptimizerInput(
                 now=now,
@@ -269,6 +270,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 cycle_cost=self.config[CONF_CYCLE_COST],
                 previous_charge_power_w=self.controller.last_power_w,
                 discharge_enabled=self.controller.discharge_enabled,
+                force_action=force_action,
                 winter_active=self.config[CONF_SWEDISH_WINTER_MODE]
                 and _is_swedish_winter(now.month, now.day),
                 winter_solar_factor=self.config[CONF_WINTER_SOLAR_FACTOR],
