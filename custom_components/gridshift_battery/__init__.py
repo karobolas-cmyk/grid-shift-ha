@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
+from .bridge import (
+    ATTR_CONFIGURATION,
+    SERVICE_APPLY_CONFIGURATION,
+    validate_configuration,
+)
 from .const import DOMAIN, STORAGE_KEY_PREFIX, STORAGE_VERSION, is_configured
 from .controller import BatteryController, RuntimeStorage
 from .coordinator import GridShiftCoordinator, merged_config
@@ -24,6 +32,32 @@ class GridShiftRuntime:
     controller: BatteryController | None
     storage: RuntimeStorage
     platforms_loaded: bool = False
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Register the narrow service used by the GridShift application."""
+
+    async def async_apply_configuration(call: ServiceCall) -> None:
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            raise HomeAssistantError("Add the GridShift Bridge integration first")
+        if len(entries) != 1:
+            raise HomeAssistantError("Multiple GridShift Bridge entries are not supported")
+        entry = entries[0]
+        validated = validate_configuration(hass, call.data[ATTR_CONFIGURATION])
+        runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if runtime and runtime.controller and runtime.controller.enabled:
+            await runtime.controller.async_set_enabled(False)
+        hass.config_entries.async_update_entry(entry, data=validated, options={})
+
+    if not hass.services.has_service(DOMAIN, SERVICE_APPLY_CONFIGURATION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_APPLY_CONFIGURATION,
+            async_apply_configuration,
+            schema=vol.Schema({vol.Required(ATTR_CONFIGURATION): dict}),
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
