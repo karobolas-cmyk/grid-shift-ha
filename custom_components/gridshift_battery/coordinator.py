@@ -249,6 +249,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             )
 
         force_action = await self.controller.async_active_force_action(now)
+        plan_action = (
+            None
+            if force_action is not None
+            else await self.controller.async_active_plan_action(now)
+        )
         decision = optimize(
             OptimizerInput(
                 now=now,
@@ -270,7 +275,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 cycle_cost=self.config[CONF_CYCLE_COST],
                 previous_charge_power_w=self.controller.last_power_w,
                 discharge_enabled=self.controller.discharge_enabled,
-                force_action=force_action,
+                force_action=force_action or plan_action,
                 winter_active=self.config[CONF_SWEDISH_WINTER_MODE]
                 and _is_swedish_winter(now.month, now.day),
                 winter_solar_factor=self.config[CONF_WINTER_SOLAR_FACTOR],
@@ -299,9 +304,26 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             decision,
             phase_data_age_seconds=round(phase_data_age, 1),
         )
+        if plan_action is not None:
+            plan_reasons = {
+                "manual_force_charge": "manual_plan_charge",
+                "manual_force_idle": "manual_plan_idle",
+            }
+            if decision.reason in plan_reasons:
+                selected_slots = decision.selected_slots
+                active_slot = next(
+                    (slot for slot in slots if slot.start <= now < slot.end), None
+                )
+                if plan_action == "charge" and active_slot is not None:
+                    selected_slots = (active_slot.start.isoformat(),)
+                decision = replace(
+                    decision,
+                    reason=plan_reasons[decision.reason],
+                    selected_slots=selected_slots,
+                )
         try:
             override = await self.controller.async_apply(decision)
-        except Exception:
+        except Exception as err:
             _LOGGER.exception("Could not safely apply the battery decision")
             return replace(
                 decision,
@@ -309,6 +331,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 charge_power_w=0,
                 discharge_power_w=0,
                 reason="control_write_failed",
+                control_error=f"{type(err).__name__}: {err}",
             )
         if override:
             decision = replace(
@@ -320,3 +343,4 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             )
         await self.storage.async_save()
         return decision
+

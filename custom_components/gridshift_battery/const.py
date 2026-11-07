@@ -5,6 +5,7 @@ from __future__ import annotations
 DOMAIN = "gridshift_battery"
 SERVICE_FORCE_ACTION = "force_action"
 SERVICE_CLEAR_FORCE_ACTION = "clear_force_action"
+SERVICE_SET_PLAN_OVERRIDES = "set_plan_overrides"
 
 CONF_PRICE_ENTITY = "price_entity"
 CONF_SOC_ENTITY = "soc_entity"
@@ -114,3 +115,4 @@ REQUIRED_CONFIGURATION_KEYS = frozenset(
 def is_configured(data: dict) -> bool:
     """Return whether an entry contains the minimum runnable mapping."""
     return REQUIRED_CONFIGURATION_KEYS.issubset(data)
+
