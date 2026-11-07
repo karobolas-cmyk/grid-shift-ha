@@ -10,6 +10,18 @@ respecting the least available headroom across all three phases. It is designed
 around Swedish electricity conditions, quarter-hour prices, weak winter solar
 production, electric heating, EV charging, and grid capacity tariffs.
 
+Configuration belongs in the GridShift application. Adding this integration in
+Home Assistant creates a local bridge and does **not** ask you to select
+entities. Connect the Home Assistant home in GridShift afterward; discovery,
+review, and entity mapping happen there.
+
+If Home Assistant still shows the old Fronius entity selectors, update the HACS
+integration to version 0.9.0 or later and restart Home Assistant before adding
+the integration again.
+
+The Home Assistant setup screen for a new bridge contains only a confirmation
+button; no battery, inverter, price, meter, or phase entity is required there.
+
 The battery control path is native to
 [`callifo/fronius_modbus`](https://github.com/callifo/fronius_modbus). GridShift
 uses its `Storage Control Mode`, `Grid Charge Power`, and optional
