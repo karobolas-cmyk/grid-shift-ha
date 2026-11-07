@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any
@@ -15,6 +16,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CHARGE_SENSOR,
+    CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_ENTITY,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
     CONF_CAPACITY_TARIFF_MODEL,
@@ -25,11 +29,13 @@ from .const import (
     CONF_EV_POWER_ENTITIES,
     CONF_EV_POWER_ENTITY,
     CONF_EXPENSIVE_QUANTILE,
+    CONF_GRID_EXPORT_SENSOR,
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
+    CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_INTERVAL_MINUTES,
     CONF_MAIN_FUSE_A,
     CONF_MAX_CHARGE_POWER_W,
@@ -153,6 +159,19 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         factors = {"W": 1, "kW": 1000, "MW": 1_000_000}
         return value * factors.get(unit, 1)
 
+    def _measured_power_w(self, entity_id: str, now) -> float:
+        """Only derive consumption from fresh power measurements, never a setpoint."""
+        state = self.hass.states.get(entity_id)
+        stamp = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if state is None or sensor_age_seconds(now, stamp) > 120:
+            raise UpdateFailed(f"{entity_id} has no fresh power measurement")
+        if state.attributes.get(ATTR_UNIT_OF_MEASUREMENT) not in {"W", "kW", "MW"}:
+            raise UpdateFailed(f"{entity_id} must measure power")
+        value = self._power_w(entity_id)
+        if not math.isfinite(value):
+            raise UpdateFailed(f"{entity_id} is not finite")
+        return value
+
     def _sum_power_w(self, entity_ids: str | list[str] | None) -> float:
         """Return the sum of one or more power entities in watts."""
         if not entity_ids:
@@ -251,12 +270,12 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         return parse_price_slots({"prices": prices}, now)
 
     async def _async_update_data(self) -> Decision:
-        if self.controller.pause_reason:
-            return Decision(
-                "blocked", 0, self.controller.pause_reason,
-                control_error=self.controller.pause_error,
-            )
         now = dt_util.now()
+        currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
+        if stale_phase_entities:
+            return await self._phase_data_failsafe(
+                phase_data_age, stale_phase_entities
+            )
         price_state = self.hass.states.get(self.config[CONF_PRICE_ENTITY])
         if price_state is None:
             raise UpdateFailed("price entity is unavailable")
@@ -271,6 +290,26 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             CONF_SOLAR_POWER_ENTITY
         )
         solar_w = self._sum_power_w(solar_entities)
+        if self.config.get(CONF_HOUSE_LOAD_IS_GRID_POWER):
+            house_w = self._measured_power_w(self.config[CONF_HOUSE_LOAD_ENTITY], now)
+            solar_ids = (
+                [solar_entities] if isinstance(solar_entities, str) else solar_entities or []
+            )
+            solar_w = sum(self._measured_power_w(entity_id, now) for entity_id in solar_ids)
+            net_entity = self.config.get(CONF_BATTERY_POWER_ENTITY)
+            if net_entity:
+                battery_w = self._measured_power_w(net_entity, now)
+            elif self.config.get(CONF_BATTERY_CHARGE_SENSOR) and self.config.get(
+                CONF_BATTERY_DISCHARGE_SENSOR
+            ):
+                battery_w = self._measured_power_w(self.config[CONF_BATTERY_CHARGE_SENSOR], now) - (
+                    self._measured_power_w(self.config[CONF_BATTERY_DISCHARGE_SENSOR], now)
+                )
+            else:
+                raise UpdateFailed("Measured battery power is required to derive house load")
+            export_entity = self.config.get(CONF_GRID_EXPORT_SENSOR)
+            export_w = self._measured_power_w(export_entity, now) if export_entity else 0.0
+            house_w = max(0.0, house_w - export_w + solar_w - battery_w)
         ev_entities = self.config.get(CONF_EV_POWER_ENTITIES) or self.config.get(
             CONF_EV_POWER_ENTITY
         )
@@ -280,12 +319,6 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         )
         self.storage.model.observe(now, total_house_w, solar_w, ev_w)
         forecasts = self.storage.model.forecast(slots)
-
-        currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
-        if stale_phase_entities:
-            return await self._phase_data_failsafe(
-                phase_data_age, stale_phase_entities
-            )
 
         force_action = await self.controller.async_active_force_action(now)
         plan_action = (
@@ -315,6 +348,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 previous_charge_power_w=self.controller.last_power_w,
                 discharge_enabled=self.controller.discharge_enabled,
                 force_action=force_action or plan_action,
+                plan_overrides=self.controller.plan_overrides,
                 winter_active=self.config[CONF_SWEDISH_WINTER_MODE]
                 and _is_swedish_winter(now.month, now.day),
                 winter_solar_factor=self.config[CONF_WINTER_SOLAR_FACTOR],
@@ -349,16 +383,9 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 "manual_force_idle": "manual_plan_idle",
             }
             if decision.reason in plan_reasons:
-                selected_slots = decision.selected_slots
-                active_slot = next(
-                    (slot for slot in slots if slot.start <= now < slot.end), None
-                )
-                if plan_action == "charge" and active_slot is not None:
-                    selected_slots = (active_slot.start.isoformat(),)
                 decision = replace(
                     decision,
                     reason=plan_reasons[decision.reason],
-                    selected_slots=selected_slots,
                 )
         try:
             override = await self.controller.async_apply(decision)

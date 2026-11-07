@@ -10,6 +10,11 @@ SERVICE_SET_PLAN_OVERRIDES = "set_plan_overrides"
 CONF_PRICE_ENTITY = "price_entity"
 CONF_SOC_ENTITY = "soc_entity"
 CONF_HOUSE_LOAD_ENTITY = "house_load_entity"
+CONF_HOUSE_LOAD_IS_GRID_POWER = "house_load_is_grid_power"
+CONF_BATTERY_POWER_ENTITY = "battery_power_entity"
+CONF_BATTERY_CHARGE_SENSOR = "battery_charge_power_sensor"
+CONF_BATTERY_DISCHARGE_SENSOR = "battery_discharge_power_sensor"
+CONF_GRID_EXPORT_SENSOR = "grid_export_power_sensor"
 CONF_EV_POWER_ENTITY = "ev_power_entity"
 CONF_EV_POWER_ENTITIES = "ev_power_entities"
 CONF_HOUSE_LOAD_INCLUDES_EV = "house_load_includes_ev"
@@ -76,6 +81,7 @@ DEFAULTS = {
     CONF_ROUND_TRIP_EFFICIENCY: 0.88,
     CONF_CYCLE_COST: 0.0,
     CONF_HOUSE_LOAD_INCLUDES_EV: True,
+    CONF_HOUSE_LOAD_IS_GRID_POWER: False,
     CONF_CHARGE_MODE_OPTION: "Charge from Grid",
     CONF_DISCHARGE_MODE_OPTION: "Discharge to Grid",
     CONF_BLOCK_DISCHARGE_MODE_OPTION: "Block Discharging",

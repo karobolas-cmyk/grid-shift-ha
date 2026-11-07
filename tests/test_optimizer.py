@@ -57,7 +57,8 @@ def scenario(
 def test_charges_in_selected_cheap_slot() -> None:
     decision = optimize(scenario(prices=[0.3, 0.4, 0.8, 1.0, 1.8, 2.0, 1.5, 1.2]))
     assert decision.action == "charge"
-    assert decision.charge_power_w == 2840
+    # Only the 50 minutes left in this interval can deliver the required energy.
+    assert decision.charge_power_w == 3400
     assert decision.reason == "cheap_slot_and_capacity_available"
     assert decision.adaptive_target_soc_pct > 20
 
@@ -270,5 +271,70 @@ def test_manual_force_discharge_requires_opt_in_and_minimum_soc() -> None:
     )
     assert active.action == "discharge"
     assert active.reason == "manual_force_discharge"
-    assert active.discharge_power_w == 3500
+    assert active.discharge_power_w == 4200
+
+
+def test_missed_charge_replans_from_actual_soc_and_remaining_time() -> None:
+    data = scenario(prices=[0.3, 0.4, 0.8, 1.0, 1.8, 2.0, 1.5, 1.2])
+    initial = optimize(data)
+    after_failure = optimize(replace(data, now=NOW + timedelta(hours=2)))
+
+    assert initial.plan["rows"][0]["action"] == "charge"
+    assert after_failure.action == "charge"
+    assert after_failure.plan["actual_soc_pct"] == 20
+    assert after_failure.plan["rows"][0]["projected_soc_start_pct"] == 20
+    assert after_failure.plan["reserve_shortfall_kwh"] > 0
+    assert after_failure.plan["stored_usable_energy_kwh"] == 0.5
+    assert all(datetime.fromisoformat(row["end"]) > NOW + timedelta(hours=2)
+               for row in after_failure.plan["rows"])
+    assert set(initial.selected_slots) != set(after_failure.selected_slots)
+
+
+def test_full_battery_and_undercharged_battery_get_different_future_plans() -> None:
+    data = scenario(prices=[0.3, 0.4, 1.8, 2.0, 1.5, 1.2], soc=28)
+    low = optimize(data)
+    full = optimize(replace(data, soc_pct=85))
+
+    assert low.selected_slots
+    assert not full.selected_slots
+    assert low.plan["energy_needed_kwh"] > full.plan["energy_needed_kwh"]
+    assert low.plan["reserve_shortfall_kwh"] > full.plan["reserve_shortfall_kwh"]
+
+
+def test_cheaper_price_after_peak_cannot_replace_charge_before_peak() -> None:
+    data = scenario(prices=[0.4, 0.6, 2.0, 2.2, 0.1, 0.2, 0.3, 0.4], soc=15)
+    decision = optimize(data)
+
+    assert decision.action == "charge"
+    first_peak = data.price_slots[2].start
+    assert any(datetime.fromisoformat(start) < first_peak for start in decision.selected_slots)
+
+
+def test_force_charge_keeps_rolling_plan_and_actual_reserve() -> None:
+    data = replace(scenario(prices=[0.3, 0.4, 1.8, 2.0], soc=28), force_action="charge")
+    decision = optimize(data)
+
+    assert decision.reason == "manual_force_charge"
+    assert len(decision.plan["rows"]) == 4
+    assert decision.plan["rows"][0]["manual"] is True
+    assert decision.plan["actual_soc_pct"] == 28
+    assert decision.plan["target_soc_pct"] > 28
+
+
+def test_future_manual_quarter_is_included_in_projection() -> None:
+    data = scenario(prices=[0.3, 0.4, 1.8, 2.0], soc=15)
+    second = data.price_slots[1].start.isoformat()
+    decision = optimize(replace(data, plan_overrides={second: "idle"}))
+
+    row = decision.plan["rows"][1]
+    assert row["manual"] is True
+    assert row["action"] == "idle"
+    assert row["charge_power_w"] == 0
+
+
+def test_overloaded_phase_reduces_existing_charge() -> None:
+    data = scenario(prices=[0.3, 0.4, 1.8, 2.0], currents=(20, 5, 5), previous=2000)
+    decision = optimize(data)
+    assert decision.phase_limit_w == 1310
+
 

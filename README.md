@@ -123,9 +123,9 @@ changing the optimizer.
 7. A price entity or the Home Assistant Tibber integration.
 
 Disable competing scheduled charge/discharge rules in Fronius. GridShift first
-selects the operating mode and waits 20 seconds by default. Charge and export
-modes then write their mode-specific power entity; `Block Discharging` needs no
-power write. This matches the contract documented by `fronius_modbus`.
+selects the operating mode, waits 20 seconds by default, and only then writes the
+power entity used by that mode, matching the contract documented by
+`fronius_modbus`.
 
 ## Installation with HACS
 
@@ -156,13 +156,12 @@ The setup flow first asks for the Fronius control entities:
 | Phase currents | `Current L1`, `Current L2`, `Current L3` |
 
 For the BYD storage shown by `callifo/fronius_modbus`, GridShift deliberately
-uses these four storage states:
+uses only these three storage states:
 
 | Storage control mode | Number entity used after the mode settles |
 | --- | --- |
 | `Auto` | None; returning control only selects `Auto` |
 | `Charge from Grid` | `number.*_grid_charge_power_*` |
-| `Block Discharging` | None; the selected mode is the control |
 | `Discharge to Grid` | `number.*_grid_discharge_power_*` |
 
 `number.*_pv_charge_limit_*` and `number.*_discharge_limit_*` belong to the
@@ -179,6 +178,25 @@ local Fronius integration, a Sigenergy plant, and homes with more than one EV
 charger. Power sensors in W, kW, and MW are supported. Keep **House load
 already includes EV charging** enabled unless the load entity explicitly excludes
 the charger.
+
+For Tibber Pulse, select **Power / Effekt** (`sensor.power_*`) for live grid
+import. **Average power / Genomsnittlig effekt**, minimum and maximum power are
+statistics and must not be used for instantaneous flow or household demand.
+Grid import includes battery charging. Prefer a dedicated house-load sensor;
+otherwise map measured battery net power (positive when charging), or both
+measured battery charging and discharging power, plus grid export when available.
+The bridge derives household demand as grid import minus export plus solar minus
+net battery charging. Measurement sensors must report W, kW or MW and be fresh.
+`number.*_grid_charge_power` is a requested setpoint, not a measurement.
+
+The action sensor includes a rolling `plan` with its generation time, actual SoC,
+stored usable energy, reserve shortfall and projected SoC for each remaining
+interval. Input changes and quarter boundaries rebuild this plan from actual SoC.
+Missed or failed charge commands are never credited as stored energy. Projection
+describes expected future operation; measured reserve describes energy available
+now. A forced action affects the current interval while the future plan continues
+to be calculated. A latched actuator failure still requires explicit re-enabling
+before any new physical commands are sent.
 
 EV charger support is entity-based. GridShift reads live charging power for load
 forecasting, phase-aware battery planning, and capacity-tariff calculations. The
@@ -268,21 +286,15 @@ to 10 W.
 
 Every special storage mode follows the same state machine:
 
-1. Select `Charge from Grid`, `Block Discharging`, or `Discharge to Grid`.
+1. Select `Charge from Grid` or `Discharge to Grid`.
 2. Wait the configured settle time, 20 seconds by default.
-3. For charge or export, verify that the matching number entity is available.
-4. For charge or export, write the mode-specific power in 10 W steps. Holding
-   stored energy requires no power write after `Block Discharging` settles.
+3. Verify that the matching number entity is available.
+4. Write `Grid Charge Power` or `Grid Discharge Power` in 10 W steps.
 5. When the action ends, select `Auto`. No 0 W write is sent during release.
 
 The wait is performed when entering or changing a special mode. Later rate
 updates in the already active mode can write the same mode-specific number
 directly; reselecting the mode would reset that number to zero.
-
-When stored energy is more valuable in a later expensive period, GridShift can
-select `Block Discharging` to keep it in reserve. This hold is only used when
-phase headroom can safely absorb the loss of battery support. It ends by returning
-to `Auto` or entering the next planned mode.
 
 Grid export has a second, independent **Allow discharge to grid** switch. Both
 that switch and **Automatic battery control** must be enabled before physical
@@ -332,25 +344,3 @@ discharge opt-in, and the mode-wait-power write order.
   work.
 
 See [architecture](docs/architecture.md) for module boundaries and safety rules.
-
-### Live quarter override
-
-The dashboard can call `gridshift_battery.force_action` with `charge`,
-`discharge`, or `idle` for up to 15 minutes. Home Assistant stores the
-override, immediately refreshes the optimizer, and still enforces phase-sensor
-freshness, fuse headroom, SoC limits, and the explicit grid-discharge opt-in.
-
-For Fronius, a charge or discharge action selects the corresponding storage
-control mode, waits the configured settle time (20 seconds by default), verifies
-that the mode-specific number entity is available, and only then writes power.
-Clearing the override or using `idle` returns the inverter to `Auto`.
-
-### Execution confirmation
-
-Explicit user actions bypass the normal coordinator debounce and run a complete
-refresh immediately. The action sensor exposes the physical storage-control mode
-and the last charge/discharge command, allowing clients to distinguish a plan
-from a command that Fronius actually accepted. Price, SoC, load, solar, EV,
-outdoor-temperature, and phase updates trigger debounced re-evaluation; the
-configured interval remains a fallback.
-

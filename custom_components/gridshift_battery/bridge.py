@@ -11,6 +11,9 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CHARGE_SENSOR,
+    CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_ENTITY,
     CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
@@ -26,11 +29,13 @@ from .const import (
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_EV_POWER_ENTITIES,
     CONF_EXPENSIVE_QUANTILE,
+    CONF_GRID_EXPORT_SENSOR,
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
+    CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_INTERVAL_MINUTES,
     CONF_LATITUDE,
     CONF_LONGITUDE,
@@ -60,6 +65,10 @@ SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 ATTR_CONFIGURATION = "configuration"
 
 ENTITY_FIELDS = {
+    CONF_GRID_EXPORT_SENSOR: "sensor",
+    CONF_BATTERY_POWER_ENTITY: "sensor",
+    CONF_BATTERY_CHARGE_SENSOR: "sensor",
+    CONF_BATTERY_DISCHARGE_SENSOR: "sensor",
     CONF_PRICE_ENTITY: "sensor",
     CONF_SOC_ENTITY: "sensor",
     CONF_HOUSE_LOAD_ENTITY: "sensor",
@@ -82,6 +91,7 @@ REQUIRED_FIELDS = {
     CONF_CHARGE_POWER_ENTITY,
 }
 SETTING_FIELDS = {
+    CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BLOCK_DISCHARGE_MODE_OPTION,
@@ -119,6 +129,7 @@ SETTING_FIELDS = {
 }
 ALLOWED_FIELDS = set(ENTITY_FIELDS) | set(ENTITY_LIST_FIELDS) | SETTING_FIELDS
 BOOLEAN_FIELDS = {
+    CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_HOUSE_LOAD_INCLUDES_EV,
     CONF_SWEDISH_WINTER_MODE,
@@ -225,6 +236,26 @@ def validate_configuration(
     for field in BOOLEAN_FIELDS & set(result):
         if not isinstance(result[field], bool):
             raise HomeAssistantError(f"{field} must be a boolean")
+    measurement_fields = (
+        CONF_BATTERY_POWER_ENTITY, CONF_BATTERY_CHARGE_SENSOR,
+        CONF_BATTERY_DISCHARGE_SENSOR, CONF_GRID_EXPORT_SENSOR,
+    )
+    for field in measurement_fields:
+        if field not in result:
+            continue
+        if any(word in result[field] for word in ("gridshift", "recommended", "setpoint")):
+            raise HomeAssistantError(f"{field} must be a measurement, not a recommended setpoint")
+        state = hass.states.get(result[field])
+        if state.attributes.get("unit_of_measurement") not in {"W", "kW", "MW"}:
+            raise HomeAssistantError(f"{field} must measure power in W, kW, or MW")
+    if result.get(CONF_HOUSE_LOAD_IS_GRID_POWER) and not (
+        result.get(CONF_BATTERY_POWER_ENTITY)
+        or (result.get(CONF_BATTERY_CHARGE_SENSOR) and result.get(CONF_BATTERY_DISCHARGE_SENSOR))
+    ):
+        raise HomeAssistantError(
+            "Grid power includes battery charging; select a measured battery net power "
+            "sensor or both measured charge and discharge sensors to derive house load"
+        )
     for field in STRING_FIELDS & set(result):
         if not isinstance(result[field], str) or not result[field] or len(result[field]) > 64:
             raise HomeAssistantError(f"{field} must be a short non-empty string")
