@@ -243,6 +243,8 @@ def validate_configuration(
     for field in measurement_fields:
         if field not in result:
             continue
+        if any(word in result[field] for word in ("gridshift", "recommended", "setpoint")):
+            raise HomeAssistantError(f"{field} must be a measurement, not a recommended setpoint")
         state = hass.states.get(result[field])
         if state.attributes.get("unit_of_measurement") not in {"W", "kW", "MW"}:
             raise HomeAssistantError(f"{field} must measure power in W, kW, or MW")

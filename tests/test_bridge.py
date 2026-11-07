@@ -136,3 +136,14 @@ def test_grid_load_rejects_battery_percentage_as_power() -> None:
     with pytest.raises(HomeAssistantError, match="must measure power"):
         validate_configuration(hass, configuration)
 
+
+def test_grid_load_rejects_our_own_recommendation_as_a_measurement() -> None:
+    hass = SimpleNamespace(states=States())
+    entity_id = "sensor.gridshift_recommended_charge_power"
+    hass.states.values[entity_id] = SimpleNamespace(
+        state="10000", attributes={"unit_of_measurement": "W"},
+    )
+    configuration = {**valid_configuration(), CONF_BATTERY_POWER_ENTITY: entity_id}
+    with pytest.raises(HomeAssistantError, match="must be a measurement"):
+        validate_configuration(hass, configuration)
+
