@@ -19,6 +19,7 @@ for name, path in (
 # The controller tests exercise ordering without installing Home Assistant.
 homeassistant = ModuleType("homeassistant")
 homeassistant_core = ModuleType("homeassistant.core")
+homeassistant_exceptions = ModuleType("homeassistant.exceptions")
 homeassistant_storage = ModuleType("homeassistant.helpers.storage")
 homeassistant_helpers = ModuleType("homeassistant.helpers")
 
@@ -31,9 +32,15 @@ class Store:
     pass
 
 
+class HomeAssistantError(Exception):
+    pass
+
+
 homeassistant_core.HomeAssistant = HomeAssistant
 homeassistant_storage.Store = Store
+homeassistant_exceptions.HomeAssistantError = HomeAssistantError
 sys.modules.setdefault("homeassistant", homeassistant)
 sys.modules.setdefault("homeassistant.core", homeassistant_core)
+sys.modules.setdefault("homeassistant.exceptions", homeassistant_exceptions)
 sys.modules.setdefault("homeassistant.helpers", homeassistant_helpers)
 sys.modules.setdefault("homeassistant.helpers.storage", homeassistant_storage)
