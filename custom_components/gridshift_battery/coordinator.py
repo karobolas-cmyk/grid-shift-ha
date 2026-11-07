@@ -52,7 +52,7 @@ from .const import (
     DEFAULTS,
     DOMAIN,
 )
-from .controller import BatteryController, PowerReadbackError, RuntimeStorage
+from .controller import BatteryController, LiveSafetyError, PowerReadbackError, RuntimeStorage
 from .models import Decision, OptimizerInput
 from .optimizer import optimize
 from .price import parse_price_slots
@@ -92,6 +92,40 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             name=DOMAIN,
             update_interval=timedelta(minutes=self.config[CONF_INTERVAL_MINUTES]),
         )
+        self.controller.power_guard = self._guard_power_write
+
+    def _guard_power_write(self, requested_w: int, action: str) -> int:
+        """Recheck live safety after settling and before each rate-write attempt."""
+        currents, _, stale = self._phase_currents(dt_util.now())
+        if stale:
+            raise LiveSafetyError(f"phase_sensor_stale before rate write: {', '.join(stale)}")
+        try:
+            soc = self._value(self.config[CONF_SOC_ENTITY])
+        except UpdateFailed as err:
+            raise LiveSafetyError("state_of_charge_unavailable before rate write") from err
+        if not 0 <= soc <= 100:
+            raise LiveSafetyError("invalid_state_of_charge before rate write")
+        if action == "charge":
+            if soc >= self.config[CONF_MAX_TARGET_SOC_PCT]:
+                raise LiveSafetyError("state_of_charge_limit before rate write")
+            headroom = min(
+                self.config[CONF_MAIN_FUSE_A]
+                - self.config[CONF_PHASE_SAFETY_MARGIN_A]
+                - max(0.0, current)
+                for current in currents
+            )
+            safe_w = max(
+                0.0,
+                self.controller.last_power_w
+                + headroom * self.config[CONF_NOMINAL_VOLTAGE_V] * 3,
+            )
+            command = min(requested_w, int(safe_w))
+            if command < 100:
+                raise LiveSafetyError("phase_capacity_exhausted before rate write")
+            return command
+        if not self.controller.discharge_enabled or soc <= self.config[CONF_MIN_SOC_PCT]:
+            raise LiveSafetyError("discharge_safety_limit before rate write")
+        return requested_w
 
     def _value(self, entity_id: str | None, default: float | None = None) -> float:
         if not entity_id:
@@ -217,6 +251,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         return parse_price_slots({"prices": prices}, now)
 
     async def _async_update_data(self) -> Decision:
+        if self.controller.pause_reason:
+            return Decision(
+                "blocked", 0, self.controller.pause_reason,
+                control_error=self.controller.pause_error,
+            )
         now = dt_util.now()
         price_state = self.hass.states.get(self.config[CONF_PRICE_ENTITY])
         if price_state is None:
@@ -331,7 +370,8 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 charge_power_w=0,
                 discharge_power_w=0,
                 reason=(
-                    "power_write_unconfirmed"
+                    str(err).split(" ", 1)[0] if isinstance(err, LiveSafetyError)
+                    else "power_write_unconfirmed"
                     if isinstance(err, PowerReadbackError)
                     else "control_write_failed"
                 ),

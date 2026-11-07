@@ -2,6 +2,21 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.5 - 2026-11-07
+
+- Reject charge/discharge entity mix-ups, including previously saved mappings
+  where Grid discharge power was selected as Grid charge power.
+
+- Stop the Auto/Charge loop by latching a failed actuator sequence. Automatic
+  control stays paused across input updates and restarts until explicitly re-enabled.
+- Keep a mode with a fresh reported 0 W setpoint after a failed power write.
+  Unknown or non-zero power still causes one safe return to Auto before pausing.
+- Retry transient rate-write and readback failures up to three times with five
+  seconds between attempts, without selecting the storage mode again.
+- Allow up to 60 seconds for a mode-specific number entity to become available,
+  and honor the settle period if the mode was changed shortly before a retry.
+- Add attempt history, mode timing, and the mapped number's limits to diagnostics.
+
 ## 0.12.4 - 2026-11-07
 
 - Confirm every charge/discharge setpoint with a fresh matching Home Assistant

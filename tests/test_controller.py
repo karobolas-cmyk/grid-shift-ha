@@ -17,7 +17,12 @@ from custom_components.gridshift_battery.const import (
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_MODE_SETTLE_SECONDS,
 )
-from custom_components.gridshift_battery.controller import BatteryController, PowerReadbackError
+from custom_components.gridshift_battery.controller import (
+    BatteryController,
+    LiveSafetyError,
+    PowerReadbackError,
+    RuntimeStorage,
+)
 from custom_components.gridshift_battery.models import Decision
 
 
@@ -57,6 +62,7 @@ class FakeStorage:
             forced_action=None,
             forced_until=None,
             plan_overrides={},
+            control_fault={},
         )
 
     async def async_save(self) -> None:
@@ -224,9 +230,10 @@ def test_rate_update_waits_for_transiently_unavailable_control() -> None:
     ]
 
 
-def test_rate_update_reports_unavailable_control_timeout() -> None:
+def test_rate_update_reports_unavailable_control_timeout(monkeypatch) -> None:
     actuator, events = controller()
     actuator.config[CONF_MODE_SETTLE_SECONDS] = 1
+    monkeypatch.setattr(controller_module, "POWER_ENTITY_TIMEOUT_SECONDS", 1)
     actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
     actuator.hass.states.values["number.grid_charge_power"].state = "unavailable"
     original_sleep = controller_module.asyncio.sleep
@@ -350,6 +357,166 @@ def test_disabling_during_settle_prevents_the_power_write(monkeypatch) -> None:
         asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
 
     assert not any(event[1] == "number" for event in events)
+
+
+def test_zero_power_write_failure_keeps_mode_and_latches_pause(monkeypatch) -> None:
+    actuator, events = controller()
+    original_call = actuator.hass.services.async_call
+
+    async def keep_zero(domain, service, data, blocking=False) -> None:
+        if domain == "number":
+            events.append(("service", domain, service, dict(data)))
+            actuator.hass.states.values[data["entity_id"]] = FakeState("0")
+        else:
+            await original_call(domain, service, data, blocking=blocking)
+
+    async def no_sleep(seconds) -> None:
+        return None
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", keep_zero)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(controller_module, "POWER_READBACK_TIMEOUT_SECONDS", 1)
+    decision = Decision("charge", 10000, "test_charge")
+    with pytest.raises(PowerReadbackError):
+        asyncio.run(actuator.async_apply(decision))
+
+    assert actuator.current_mode == "Charge from Grid"
+    assert actuator.enabled is False
+    assert actuator.pause_reason == "control_paused_after_write_failure"
+    assert actuator.execution["fallback_action"] == "retain_verified_zero_mode"
+    assert actuator.execution["write_attempt"] == 3
+    assert [event[3]["option"] for event in events if event[1] == "select"] == [
+        "Charge from Grid"
+    ]
+    before = list(events)
+    assert asyncio.run(actuator.async_apply(decision)) == actuator.pause_reason
+    assert events == before
+
+
+def test_transient_write_retry_does_not_reselect_mode(monkeypatch) -> None:
+    actuator, events = controller()
+    original_call = actuator.hass.services.async_call
+    number_attempts = 0
+
+    async def unavailable_once(domain, service, data, blocking=False) -> None:
+        nonlocal number_attempts
+        if domain == "number":
+            number_attempts += 1
+            if number_attempts == 1:
+                raise RuntimeError("number is not ready after mode switch")
+        await original_call(domain, service, data, blocking=blocking)
+
+    async def no_sleep(seconds) -> None:
+        return None
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", unavailable_once)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert actuator.execution["status"] == "confirmed"
+    assert actuator.execution["write_attempt"] == 2
+    assert len(actuator.execution["write_attempts"]) == 1
+    assert len([event for event in events if event[1] == "select"]) == 1
+    assert actuator.last_power_w == 10000
+
+
+def test_nonzero_failure_returns_to_auto_once_and_stays_paused(monkeypatch) -> None:
+    actuator, events = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"] = FakeState("3263")
+    original_call = actuator.hass.services.async_call
+
+    async def refuse_write(domain, service, data, blocking=False) -> None:
+        if domain == "number":
+            raise RuntimeError("write refused")
+        await original_call(domain, service, data, blocking=blocking)
+
+    monkeypatch.setattr(actuator.hass.services, "async_call", refuse_write)
+    decision = Decision("charge", 10000, "test_charge")
+    with pytest.raises(RuntimeError, match="write refused"):
+        asyncio.run(actuator.async_apply(decision))
+    assert actuator.current_mode == "Auto"
+    before = list(events)
+    asyncio.run(actuator.async_apply(decision))
+    assert events == before
+    assert actuator.enabled is False
+
+
+def test_explicit_reenable_clears_the_latched_failure() -> None:
+    actuator, _ = controller()
+    actuator.storage.state.enabled = False
+    actuator.storage.state.control_fault = {"reason": "control_paused_after_write_failure"}
+    asyncio.run(actuator.async_set_enabled(True))
+    assert actuator.enabled is True
+    assert actuator.pause_reason is None
+
+
+def test_each_write_attempt_rechecks_the_live_power_guard(monkeypatch) -> None:
+    actuator, events = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    original_call = actuator.hass.services.async_call
+    guard_calls = []
+
+    def guard(requested, action):
+        guard_calls.append((requested, action))
+        return 5000 if len(guard_calls) == 1 else 2000
+
+    async def unavailable_once(domain, service, data, blocking=False) -> None:
+        if domain == "number" and len(guard_calls) == 1:
+            raise RuntimeError("number temporarily unavailable")
+        await original_call(domain, service, data, blocking=blocking)
+
+    async def no_sleep(seconds) -> None:
+        return None
+
+    actuator.power_guard = guard
+    monkeypatch.setattr(actuator.hass.services, "async_call", unavailable_once)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+    assert len(guard_calls) == 2
+    assert events[-1][3]["value"] == 2000
+
+
+def test_live_safety_hold_does_not_latch_a_device_write_fault() -> None:
+    actuator, events = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+
+    def safety_hold(requested, action):
+        raise LiveSafetyError("phase_sensor_stale before rate write")
+
+    actuator.power_guard = safety_hold
+    with pytest.raises(LiveSafetyError):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+
+    assert actuator.enabled is True
+    assert actuator.pause_reason is None
+    assert not any(event[1] == "number" for event in events)
+
+
+def test_saved_discharge_as_charge_mapping_is_blocked_before_mode_change() -> None:
+    actuator, events = controller()
+    actuator.config[CONF_CHARGE_POWER_ENTITY] = "number.grid_discharge_power"
+    with pytest.raises(RuntimeError, match="invalid_power_entity_mapping"):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "test_charge")))
+    assert events == []
+    assert actuator.enabled is False
+    assert actuator.execution["power_entity"] == "number.grid_discharge_power"
+
+
+def test_paused_fault_survives_restart() -> None:
+    storage = RuntimeStorage(
+        SimpleNamespace(),
+        {
+            "enabled": True,
+            "control_fault": {
+                "reason": "control_paused_after_write_failure",
+                "error": "Requested 10000 W; read back 0 W",
+                "execution": {"status": "failed", "paused": True},
+            },
+        },
+    )
+    assert storage.state.enabled is False
+    assert storage.state.control_fault["execution"]["paused"] is True
 
 
 def test_disarming_grid_discharge_only_returns_to_auto() -> None:

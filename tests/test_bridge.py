@@ -7,6 +7,7 @@ from custom_components.gridshift_battery.bridge import validate_configuration
 from custom_components.gridshift_battery.const import (
     CONF_CHARGE_POWER_ENTITY,
     CONF_CONTROL_MODE_ENTITY,
+    CONF_DISCHARGE_POWER_ENTITY,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
     CONF_PRICE_ENTITY,
@@ -78,3 +79,20 @@ def test_bridge_rejects_unknown_fields() -> None:
     configuration = {**valid_configuration(), "call_any_service": True}
     with pytest.raises(HomeAssistantError, match="unsupported configuration fields"):
         validate_configuration(hass, configuration)
+
+
+def test_bridge_rejects_discharge_entity_mapped_as_charge() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = valid_configuration()
+    configuration[CONF_CHARGE_POWER_ENTITY] = "number.byd_grid_discharge_power_2"
+    with pytest.raises(HomeAssistantError, match="distinct"):
+        validate_configuration(hass, configuration)
+
+
+def test_bridge_rejects_same_entity_for_both_power_roles() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = valid_configuration()
+    configuration[CONF_DISCHARGE_POWER_ENTITY] = configuration[CONF_CHARGE_POWER_ENTITY]
+    with pytest.raises(HomeAssistantError, match="distinct"):
+        validate_configuration(hass, configuration)
+

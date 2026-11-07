@@ -185,6 +185,17 @@ def validate_configuration(
         raise HomeAssistantError(f"missing configuration fields: {', '.join(sorted(missing))}")
 
     result = dict(raw)
+    charge_entity = str(result.get(CONF_CHARGE_POWER_ENTITY, ""))
+    discharge_entity = str(result.get(CONF_DISCHARGE_POWER_ENTITY, ""))
+    if (
+        charge_entity == discharge_entity
+        or "grid_discharge_power" in charge_entity.lower()
+        or "grid_charge_power" in discharge_entity.lower()
+    ):
+        raise HomeAssistantError(
+            "charge_power_entity and discharge_power_entity must be distinct, "
+            "with Grid charge power used only for charging"
+        )
     for field, domain in ENTITY_FIELDS.items():
         value = result.get(field)
         if value in (None, "") and field not in REQUIRED_FIELDS:
@@ -264,3 +275,4 @@ def validate_configuration(
     if fuse <= 0 or margin < 0 or margin >= fuse:
         raise HomeAssistantError("phase safety margin must be lower than the main fuse")
     return result
+
