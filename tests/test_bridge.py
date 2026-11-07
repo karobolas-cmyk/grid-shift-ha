@@ -25,7 +25,14 @@ class States:
             "sensor.l3": SimpleNamespace(state="7", attributes={}),
             "select.mode": SimpleNamespace(
                 state="Auto",
-                attributes={"options": ["Auto", "Charge from Grid", "Block Discharging", "Discharge to Grid"]},
+                attributes={
+                    "options": [
+                        "Auto",
+                        "Charge from Grid",
+                        "Block Discharging",
+                        "Discharge to Grid",
+                    ]
+                },
             ),
             "number.charge": SimpleNamespace(state="unavailable", attributes={}),
         }
