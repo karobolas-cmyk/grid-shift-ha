@@ -27,6 +27,7 @@ from .const import (
     CONF_EV_POWER_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
@@ -77,6 +78,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         if runtime and runtime.coordinator and runtime.coordinator.thermal.enabled:
             await runtime.coordinator.thermal.async_set_enabled(False, dt_util.now())
         source_fields = {
+            "house_consumption_entity",
             "house_load_entity", "house_load_source", "house_load_direction",
             "house_load_is_grid_power", "battery_power_entity", "battery_power_direction",
             "battery_charge_power_sensor", "battery_discharge_power_sensor",
@@ -192,6 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         *controller.config[CONF_PHASE_CURRENT_ENTITIES],
     }
     for key in (
+        CONF_HOUSE_CONSUMPTION_ENTITY,
         CONF_PRICE_ENTITY,
         CONF_GRID_POWER_ENTITY,
         CONF_WEATHER_ENTITY,
@@ -244,6 +247,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload and safely relinquish battery control."""
     runtime: GridShiftRuntime = hass.data[DOMAIN][entry.entry_id]
     if runtime.coordinator is not None:
+        if runtime.coordinator.price_task and not runtime.coordinator.price_task.done():
+            runtime.coordinator.price_task.cancel()
         if runtime.coordinator.thermal_task:
             await runtime.coordinator.thermal_task
         await runtime.coordinator.thermal.async_release(dt_util.now())

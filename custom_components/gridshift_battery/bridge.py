@@ -36,6 +36,7 @@ from .const import (
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_HOUSE_LOAD_DIRECTION,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
@@ -82,6 +83,7 @@ SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 ATTR_CONFIGURATION = "configuration"
 
 ENTITY_FIELDS = {
+    CONF_HOUSE_CONSUMPTION_ENTITY: "sensor",
     CONF_GRID_POWER_ENTITY: "sensor",
     CONF_WEATHER_ENTITY: "weather",
     CONF_GRID_EXPORT_SENSOR: "sensor",
@@ -273,6 +275,7 @@ def validate_configuration(
         if not isinstance(result[field], bool):
             raise HomeAssistantError(f"{field} must be a boolean")
     measurement_fields = (
+        CONF_HOUSE_CONSUMPTION_ENTITY,
         CONF_BATTERY_POWER_ENTITY, CONF_BATTERY_CHARGE_SENSOR,
         CONF_BATTERY_DISCHARGE_SENSOR, CONF_GRID_EXPORT_SENSOR, CONF_GRID_POWER_ENTITY,
     )
@@ -285,12 +288,18 @@ def validate_configuration(
         if state.attributes.get("unit_of_measurement") not in {"W", "kW", "MW"}:
             raise HomeAssistantError(f"{field} must measure power in W, kW, or MW")
     house_state = hass.states.get(result[CONF_HOUSE_LOAD_ENTITY])
+    consumption_id = result.get(CONF_HOUSE_CONSUMPTION_ENTITY)
+    if consumption_id:
+        consumption = hass.states.get(consumption_id)
+        if house_input_is_grid(consumption_id, consumption.attributes.get("friendly_name", "")):
+            raise HomeAssistantError("house_consumption_entity must be total house consumption, "
+                                     "not a grid import or net meter")
     house_is_grid = house_input_is_grid(
         result[CONF_HOUSE_LOAD_ENTITY], house_state.attributes.get("friendly_name", ""),
         result.get(CONF_HOUSE_LOAD_SOURCE, "auto"),
         result.get(CONF_HOUSE_LOAD_IS_GRID_POWER, False),
     )
-    if house_is_grid and not (
+    if house_is_grid and not result.get(CONF_HOUSE_CONSUMPTION_ENTITY) and not (
         result.get(CONF_BATTERY_POWER_ENTITY)
         or (result.get(CONF_BATTERY_CHARGE_SENSOR) and result.get(CONF_BATTERY_DISCHARGE_SENSOR))
     ):

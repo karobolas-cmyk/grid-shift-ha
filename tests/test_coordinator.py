@@ -137,7 +137,30 @@ def test_reported_zero_phases_and_battery_supplied_house_still_plan(monkeypatch)
         controller.execution = {"action": "charge", "status": "pending",
                                 "requested_power_w": 10000}
         assert not item._guard_thermal_increase((6, 6, 6))
+        states["sensor.solarnet_power_load_consumed"] = SimpleNamespace(
+            state="4210", last_reported=NOW,
+            attributes={"unit_of_measurement": "W"},
+        )
+        item.config["house_consumption_entity"] = "sensor.solarnet_power_load_consumed"
+        item.config["house_load_source"] = "grid"
+        states["sensor.grid"].state = "288"
+        states["sensor.discharge"].state = "3920"
+        states["sensor.solar"].state = "0"
+        controller.enabled = False
+        await item._async_update_data()
+        assert item.power_sources["house_consumption_w"] == 4210
+        assert item.power_sources["house_source"] == "measured_total"
+        assert not item.power_sources["house_is_grid"]
+        assert item.power_snapshot["mapping"]["house_consumption_entity"] == (
+            "sensor.solarnet_power_load_consumed"
+        )
+        # A phase fault must stop actuation immediately without hiding published prices.
         states["sensor.l2"].last_reported = NOW - timedelta(minutes=3)
         assert not item._guard_thermal_increase((2, 2, 2))
+        stale_decision = await item._async_update_data()
+        assert stale_decision.reason == "phase_sensor_stale"
+        await asyncio.gather(*tasks)
+        assert item.prices.snapshot["status"] == "ready"
+        assert len(item.prices.snapshot["slots"]) == 2
 
     asyncio.run(run())

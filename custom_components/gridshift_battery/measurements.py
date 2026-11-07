@@ -14,6 +14,7 @@ def report_time(state):
 def power_snapshot(hass, config: dict, now: datetime) -> dict:
     """Publish source readings, never a command or a fabricated report time."""
     fields = (
+        "house_consumption_entity",
         "house_load_entity",
         "grid_power_entity",
         "grid_export_power_sensor",
@@ -46,4 +47,5 @@ def power_snapshot(hass, config: dict, now: datetime) -> dict:
                 "unit_of_measurement": unit,
                 "last_reported": stamp.isoformat(),
             }
-    return {"captured_at": now.isoformat(), "entities": entities}
+    return {"captured_at": now.isoformat(), "entities": entities,
+            "mapping": {key: config[key] for key in fields if config.get(key)}}

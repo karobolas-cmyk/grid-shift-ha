@@ -31,7 +31,7 @@ def house_input_is_grid(
         return source == "grid"
     text = f"{entity_id} {name}".lower()
     return legacy_grid or bool(re.search(
-        r"power_grid|grid_power|grid_import|nätimport|grid import|"
+        r"power_grid|grid_power|grid_import|eln[aä]t[_. ]*import|nätimport|grid import|"
         r"(?:tibber|pulse).*(?:effekt|power)",
         text,
     ))

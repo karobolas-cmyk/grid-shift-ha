@@ -313,6 +313,21 @@ does not make a stopped sensor fresh. Map Fronius **Battery charging**, **Batter
 discharging**, **Consumed power**, **Grid import** and **Grid export** for live flow.
 Grid import is not household demand when the battery is supplying the house.
 
+Configure **Total house consumption · all sources** separately from grid import.
+For Fronius, use `sensor.solarnet_power_load_consumed` for the total and
+`sensor.solarnet_elnat_import` (or `sensor.solarnet_power_grid_import`) for import.
+The former is the house's total consumed power, including energy delivered by
+the battery, solar and grid. Battery discharge remains a separate measurement;
+it is not added to the total again. For example, 288 W import plus approximately
+3.92 kW battery discharge at night supplies approximately 4.21 kW consumption.
+
+The bridge stores the dedicated total as `house_consumption_entity`. It takes
+precedence over the legacy `house_load_entity` input and its grid/house role.
+If no total sensor exists, leave the dedicated total empty and configure the
+grid/battery/solar inputs for an explicitly calculated energy balance instead.
+The power snapshot contains the saved `mapping`, and the action sensor publishes
+`bridge_version` and `capabilities` to diagnose configuration mismatches.
+
 The thermal model includes generic profiles for air-to-air, air-to-water,
 borehole ground-source, horizontal ground-loop, and resistive heating. Each
 profile changes how COP responds to outdoor temperature, while SCOP remains

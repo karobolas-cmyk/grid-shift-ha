@@ -188,3 +188,21 @@ def test_thermostat_configuration_rejects_unbounded_or_unknown_targets() -> None
     with pytest.raises(HomeAssistantError, match="must be a climate entity"):
         validate_climate_rules(hass, [{**rule, "entity_id": "light.room"}])
 
+
+def test_total_consumption_is_separate_from_grid_and_does_not_require_battery_measurements():
+    states = States()
+    states.values["sensor.solarnet_power_load_consumed"] = SimpleNamespace(
+        state="4210", attributes={"unit_of_measurement": "W"},
+    )
+    states.values["sensor.solarnet_elnat_import"] = SimpleNamespace(
+        state="288", attributes={"unit_of_measurement": "W"},
+    )
+    config = {**valid_configuration(), "house_load_entity": "sensor.solarnet_elnat_import",
+              "house_load_source": "grid", "grid_power_entity": "sensor.solarnet_elnat_import",
+              "house_consumption_entity": "sensor.solarnet_power_load_consumed"}
+    assert validate_configuration(SimpleNamespace(states=states), config) == config
+    with pytest.raises(HomeAssistantError, match="not a grid import"):
+        validate_configuration(SimpleNamespace(states=states), {
+            **config, "house_consumption_entity": "sensor.solarnet_elnat_import",
+        })
+

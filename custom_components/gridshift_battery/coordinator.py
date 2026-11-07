@@ -34,6 +34,7 @@ from .const import (
     CONF_HEATING_BALANCE_TEMP_C,
     CONF_HEATING_RESERVE_KW_PER_C,
     CONF_HORIZON_HOURS,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_HOUSE_LOAD_DIRECTION,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_INCLUDES_EV,
@@ -110,6 +111,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         self.thermal = ThermalController(hass, self.config, storage)
         self.thermal.phase_guard = self._guard_thermal_increase
         self.thermal_task = None
+        self.price_task = None
         super().__init__(
             hass,
             _LOGGER,
@@ -344,12 +346,19 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
         if stale_phase_entities:
+            # Price visibility does not depend on having safe phase inputs.
+            # The physical failsafe below must still run immediately.
+            if self.price_task is None or self.price_task.done():
+                self.price_task = self.hass.async_create_task(self.prices.async_prices(now))
             if self.thermal_task is None or self.thermal_task.done():
                 self.thermal_task = self.hass.async_create_task(
                     self.thermal.async_evaluate((), now, currents, stale_phase_entities)
                 )
             return await self._phase_data_failsafe(phase_data_age, stale_phase_entities)
-        slots = await self.prices.async_prices(now)
+        if self.price_task and not self.price_task.done():
+            slots = await self.price_task
+        else:
+            slots = await self.prices.async_prices(now)
         now = dt_util.now()
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
@@ -364,16 +373,18 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         horizon_end = now + timedelta(hours=self.config[CONF_HORIZON_HOURS])
         slots = tuple(slot for slot in slots if slot.end > now and slot.start < horizon_end)
 
-        house_id = self.config[CONF_HOUSE_LOAD_ENTITY]
+        consumption_id = self.config.get(CONF_HOUSE_CONSUMPTION_ENTITY)
+        house_id = consumption_id or self.config[CONF_HOUSE_LOAD_ENTITY]
         house_state = self.hass.states.get(house_id)
-        house_is_grid = house_input_is_grid(
+        house_is_grid = not consumption_id and house_input_is_grid(
             house_id, house_state.attributes.get("friendly_name", "") if house_state else "",
             self.config[CONF_HOUSE_LOAD_SOURCE],
             self.config.get(CONF_HOUSE_LOAD_IS_GRID_POWER, False),
         )
         house_inverted = house_power_inverted(house_id, self.config[CONF_HOUSE_LOAD_DIRECTION])
         house_sign = -1 if house_inverted else 1
-        house_w = self._power_w(house_id) * house_sign
+        house_w = (self._measured_power_w(house_id, now) if consumption_id
+                   else self._power_w(house_id)) * house_sign
         solar_entities = self.config.get(CONF_SOLAR_POWER_ENTITIES) or self.config.get(
             CONF_SOLAR_POWER_ENTITY
         )
@@ -399,6 +410,10 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             house_w if self.config[CONF_HOUSE_LOAD_INCLUDES_EV] else house_w + ev_w
         )
         self.power_sources = {
+            "house_consumption_entity": consumption_id,
+            "house_source": "measured_total" if consumption_id else (
+                "calculated_from_grid" if house_is_grid else "legacy_house_measurement"
+            ),
             "house_entity": house_id, "house_is_grid": house_is_grid,
             "house_inverted": house_inverted, "house_consumption_w": round(total_house_w, 1),
             "battery_net_entity": self.config.get(CONF_BATTERY_POWER_ENTITY),
