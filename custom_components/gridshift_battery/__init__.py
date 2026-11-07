@@ -19,7 +19,15 @@ from .bridge import (
     validate_configuration,
 )
 from .const import (
+    CONF_EV_POWER_ENTITIES,
+    CONF_EV_POWER_ENTITY,
+    CONF_HOUSE_LOAD_ENTITY,
+    CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
+    CONF_PRICE_ENTITY,
+    CONF_SOC_ENTITY,
+    CONF_SOLAR_POWER_ENTITIES,
+    CONF_SOLAR_POWER_ENTITY,
     DOMAIN,
     SERVICE_CLEAR_FORCE_ACTION,
     SERVICE_FORCE_ACTION,
@@ -76,7 +84,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         await runtime.controller.async_set_force_action(
             action, call.data["duration_minutes"]
         )
-        await runtime.coordinator.async_request_refresh()
+        await runtime.coordinator.async_refresh()
 
     async def async_clear_force_action(call: ServiceCall) -> None:
         entries = hass.config_entries.async_entries(DOMAIN)
@@ -88,7 +96,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         if runtime is None or runtime.controller is None or runtime.coordinator is None:
             raise HomeAssistantError("Configure the GridShift Bridge before using live control")
         await runtime.controller.async_clear_force_action()
-        await runtime.coordinator.async_request_refresh()
+        await runtime.coordinator.async_refresh()
 
     if not hass.services.has_service(DOMAIN, SERVICE_APPLY_CONFIGURATION):
         hass.services.async_register(
@@ -137,16 +145,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime = GridShiftRuntime(coordinator, controller, storage, True)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
+    watched_entities = {
+        controller.config[CONF_PRICE_ENTITY],
+        controller.config[CONF_SOC_ENTITY],
+        controller.config[CONF_HOUSE_LOAD_ENTITY],
+        *controller.config[CONF_PHASE_CURRENT_ENTITIES],
+    }
+    for key in (
+        CONF_SOLAR_POWER_ENTITY,
+        CONF_SOLAR_POWER_ENTITIES,
+        CONF_EV_POWER_ENTITY,
+        CONF_EV_POWER_ENTITIES,
+        CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    ):
+        value = controller.config.get(key)
+        if isinstance(value, str):
+            watched_entities.add(value)
+        elif isinstance(value, (list, tuple)):
+            watched_entities.update(item for item in value if isinstance(item, str))
+
     @callback
-    def async_phase_sensor_changed(event: Event) -> None:
-        """Re-evaluate immediately when stale or loaded phase data changes."""
+    def async_input_sensor_changed(event: Event) -> None:
+        """Debounce a fresh decision whenever live optimizer inputs change."""
         hass.async_create_task(coordinator.async_request_refresh())
 
     entry.async_on_unload(
         async_track_state_change_event(
             hass,
-            controller.config[CONF_PHASE_CURRENT_ENTITIES],
-            async_phase_sensor_changed,
+            sorted(watched_entities),
+            async_input_sensor_changed,
         )
     )
     await coordinator.async_config_entry_first_refresh()

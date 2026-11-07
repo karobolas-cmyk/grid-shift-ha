@@ -86,6 +86,11 @@ class BatteryController:
         return self.storage.state.discharge_enabled
 
     @property
+    def current_mode(self) -> str | None:
+        """Return the physical Fronius storage-control mode."""
+        return self._mode()
+
+    @property
     def forced_action(self) -> str | None:
         """Return the currently stored manual action."""
         return self.storage.state.forced_action

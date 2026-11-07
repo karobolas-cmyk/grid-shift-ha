@@ -345,3 +345,12 @@ control mode, waits the configured settle time (20 seconds by default), verifies
 that the mode-specific number entity is available, and only then writes power.
 Clearing the override or using `idle` returns the inverter to `Auto`.
 
+### Execution confirmation
+
+Explicit user actions bypass the normal coordinator debounce and run a complete
+refresh immediately. The action sensor exposes the physical storage-control mode
+and the last charge/discharge command, allowing clients to distinguish a plan
+from a command that Fronius actually accepted. Price, SoC, load, solar, EV,
+outdoor-temperature, and phase updates trigger debounced re-evaluation; the
+configured interval remains a fallback.
+
