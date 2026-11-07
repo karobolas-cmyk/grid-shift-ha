@@ -11,6 +11,9 @@ CONF_PRICE_ENTITY = "price_entity"
 CONF_SOC_ENTITY = "soc_entity"
 CONF_HOUSE_LOAD_ENTITY = "house_load_entity"
 CONF_HOUSE_LOAD_IS_GRID_POWER = "house_load_is_grid_power"
+CONF_HOUSE_LOAD_SOURCE = "house_load_source"
+CONF_HOUSE_LOAD_DIRECTION = "house_load_direction"
+CONF_BATTERY_POWER_DIRECTION = "battery_power_direction"
 CONF_BATTERY_POWER_ENTITY = "battery_power_entity"
 CONF_BATTERY_CHARGE_SENSOR = "battery_charge_power_sensor"
 CONF_BATTERY_DISCHARGE_SENSOR = "battery_discharge_power_sensor"
@@ -65,6 +68,9 @@ CONF_CAPACITY_TARIFF_START_HOUR = "capacity_tariff_start_hour"
 CONF_CAPACITY_TARIFF_END_HOUR = "capacity_tariff_end_hour"
 
 DEFAULTS = {
+    CONF_HOUSE_LOAD_SOURCE: "auto",
+    CONF_HOUSE_LOAD_DIRECTION: "auto",
+    CONF_BATTERY_POWER_DIRECTION: "auto",
     CONF_BATTERY_CAPACITY_KWH: 10.0,
     CONF_MIN_SOC_PCT: 15.0,
     CONF_MAX_TARGET_SOC_PCT: 85.0,

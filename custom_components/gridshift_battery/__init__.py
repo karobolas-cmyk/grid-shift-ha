@@ -42,6 +42,7 @@ from .const import (
 )
 from .controller import BatteryController, RuntimeStorage
 from .coordinator import GridShiftCoordinator, merged_config
+from .learning import ConsumptionModel
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
@@ -70,6 +71,14 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if runtime and runtime.controller and runtime.controller.enabled:
             await runtime.controller.async_set_enabled(False)
+        source_fields = {
+            "house_load_entity", "house_load_source", "house_load_direction",
+            "house_load_is_grid_power", "battery_power_entity", "battery_power_direction",
+            "battery_charge_power_sensor", "battery_discharge_power_sensor",
+        }
+        if runtime and any(entry.data.get(key) != validated.get(key) for key in source_fields):
+            runtime.storage.model = ConsumptionModel()
+            await runtime.storage.async_save()
         hass.config_entries.async_update_entry(entry, data=validated, options={})
 
     async def async_force_action(call: ServiceCall) -> None:

@@ -57,8 +57,8 @@ def scenario(
 def test_charges_in_selected_cheap_slot() -> None:
     decision = optimize(scenario(prices=[0.3, 0.4, 0.8, 1.0, 1.8, 2.0, 1.5, 1.2]))
     assert decision.action == "charge"
-    # Only the 50 minutes left in this interval can deliver the required energy.
-    assert decision.charge_power_w == 3400
+    # Cover the entire protected period, using only this interval's 50 minutes left.
+    assert decision.charge_power_w == 4770
     assert decision.reason == "cheap_slot_and_capacity_available"
     assert decision.adaptive_target_soc_pct > 20
 
@@ -336,5 +336,72 @@ def test_overloaded_phase_reduces_existing_charge() -> None:
     data = scenario(prices=[0.3, 0.4, 1.8, 2.0], currents=(20, 5, 5), previous=2000)
     decision = optimize(data)
     assert decision.phase_limit_w == 1310
+
+
+def large_battery_scenario() -> OptimizerInput:
+    data = scenario(prices=[0.5] * 4 + [0.8] * 8 + [3] * 8 + [2] * 12 + [0.3] * 4, soc=15)
+    start = NOW.replace(minute=0)
+    slots = tuple(
+        PriceSlot(start + timedelta(minutes=i * 15), start + timedelta(minutes=(i + 1) * 15),
+                  slot.price)
+        for i, slot in enumerate(data.price_slots)
+    )
+    forecasts = tuple(EnergyForecast(slot.start, slot.end, 4000, 0, 0) for slot in slots)
+    return replace(
+        data, now=start, price_slots=slots, forecasts=forecasts,
+        battery_capacity_kwh=26, max_charge_power_w=10000, main_fuse_a=25,
+        phase_currents_a=(1, 1, 1),
+    )
+
+
+def test_26_kwh_battery_cannot_refill_in_45_minutes_at_10_kw() -> None:
+    decision = optimize(large_battery_scenario())
+    plan = decision.plan
+    assert plan["target_soc_pct"] == 85
+    assert plan["energy_needed_kwh"] > 20
+    assert plan["required_charge_minutes"] > 120
+    assert sum(session["minutes"] for session in plan["charge_sessions"]) >= 120
+    assert sum(session["grid_energy_kwh"] for session in plan["charge_sessions"]) > 20
+    assert plan["unmet_target_kwh"] < 0.02
+    assert max(row["projected_soc_end_pct"] for row in plan["rows"]) <= 85
+
+
+def test_future_plan_uses_phase_capacity_and_reports_unreachable_target() -> None:
+    data = replace(large_battery_scenario(), phase_currents_a=(7.4, 21.9, 5.2))
+    decision = optimize(data)
+    plan = decision.plan
+    assert plan["planning_charge_power_w"] == 1440
+    assert plan["required_charge_minutes"] > 800
+    assert plan["projected_reserve_soc_pct"] < 35
+    assert plan["unmet_target_kwh"] > 10
+    assert all(row["charge_power_w"] <= 1440 for row in plan["rows"])
+
+
+def test_reserve_covers_medium_prices_between_peaks_until_recharge() -> None:
+    data = large_battery_scenario()
+    prices = [0.5] * 12 + [3] * 4 + [1 + i / 100 for i in range(24)] + [3] * 4 + [0.3] * 4
+    start = data.now
+    slots = tuple(PriceSlot(
+        start + timedelta(minutes=i * 15), start + timedelta(minutes=(i + 1) * 15), price
+    ) for i, price in enumerate(prices))
+    forecasts = tuple(EnergyForecast(slot.start, slot.end, 2000, 0, 0) for slot in slots)
+    decision = optimize(replace(data, price_slots=slots, forecasts=forecasts))
+    assert decision.plan["reserve_required_kwh"] == 16
+    assert decision.plan["target_soc_pct"] > 75
+    assert decision.plan["required_charge_minutes"] > 100
+
+
+def test_short_cheap_window_only_credits_energy_it_can_deliver() -> None:
+    data = large_battery_scenario()
+    prices = [0.3] * 8 + [3] * 8 + [0.2] + [3] * 8 + [0.3]
+    slots = tuple(PriceSlot(
+        data.now + timedelta(minutes=i * 15),
+        data.now + timedelta(minutes=(i + 1) * 15), price,
+    ) for i, price in enumerate(prices))
+    forecasts = tuple(EnergyForecast(slot.start, slot.end, 2000, 0, 0) for slot in slots)
+    decision = optimize(replace(data, price_slots=slots, forecasts=forecasts))
+    # Two 4 kWh demand periods, with only 2.2 kWh of feasible replenishment
+    # between them: the first charge must reserve 5.8 kWh, not just 4 kWh.
+    assert decision.plan["reserve_required_kwh"] == 5.8
 
 

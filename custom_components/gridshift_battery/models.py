@@ -109,6 +109,8 @@ class Decision:
     capacity_tariff_estimated_fee: float = 0.0
     selected_slots: tuple[str, ...] = field(default_factory=tuple)
     control_error: str | None = None
+    reserve_start: str | None = None
+    reserve_end: str | None = None
     plan: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:

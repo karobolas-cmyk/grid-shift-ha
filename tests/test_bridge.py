@@ -147,3 +147,19 @@ def test_grid_load_rejects_our_own_recommendation_as_a_measurement() -> None:
     with pytest.raises(HomeAssistantError, match="must be a measurement"):
         validate_configuration(hass, configuration)
 
+
+def test_bridge_accepts_manual_polarity_and_source_overrides() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = {
+        **valid_configuration(), "battery_power_direction": "positive_discharging",
+        "house_load_direction": "negative_consumption", "house_load_source": "house",
+    }
+    assert validate_configuration(hass, configuration) == configuration
+
+
+def test_bridge_rejects_unsupported_polarity() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = {**valid_configuration(), "battery_power_direction": "guess"}
+    with pytest.raises(HomeAssistantError, match="unsupported battery_power_direction"):
+        validate_configuration(hass, configuration)
+
