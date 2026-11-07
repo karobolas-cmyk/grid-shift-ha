@@ -2,6 +2,19 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.3 - 2026-11-07
+
+- Wait for Fronius mode-specific charge and discharge controls to become
+  available instead of failing on their transient state immediately after a
+  storage-mode transition.
+- Expose the exact actuator exception on the action sensor so the GridShift UI
+  can distinguish a failed write from a delayed Home Assistant state update.
+- Keep physical mode and last confirmed power available for post-write
+  reconciliation in the hosted dashboard.
+- Persist manual quarter-hour graph overrides in Home Assistant so a selected
+  charging run continues across quarter boundaries even when the browser is
+  closed.
+
 ## 0.12.2 - 2026-11-07
 
 - Allow explicit manual charge, idle, and discharge actions when the automatic
@@ -164,3 +177,4 @@ All notable changes are documented here. The project follows semantic versioning
 - Added the first local Home Assistant integration.
 - Added adaptive SoC targets, price planning, and three-phase fuse protection.
 - Added native control through `callifo/fronius_modbus` entities.
+

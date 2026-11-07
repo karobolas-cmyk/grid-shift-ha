@@ -31,6 +31,7 @@ from .const import (
     DOMAIN,
     SERVICE_CLEAR_FORCE_ACTION,
     SERVICE_FORCE_ACTION,
+    SERVICE_SET_PLAN_OVERRIDES,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
     is_configured,
@@ -98,6 +99,21 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         await runtime.controller.async_clear_force_action()
         await runtime.coordinator.async_refresh()
 
+    async def async_set_plan_overrides(call: ServiceCall) -> None:
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if len(entries) != 1:
+            raise HomeAssistantError("Exactly one configured GridShift entry is required")
+        runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(
+            entries[0].entry_id
+        )
+        if runtime is None or runtime.controller is None or runtime.coordinator is None:
+            raise HomeAssistantError("Configure the GridShift Bridge before setting a plan")
+        try:
+            await runtime.controller.async_set_plan_overrides(call.data["overrides"])
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await runtime.coordinator.async_refresh()
+
     if not hass.services.has_service(DOMAIN, SERVICE_APPLY_CONFIGURATION):
         hass.services.async_register(
             DOMAIN,
@@ -125,6 +141,13 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             SERVICE_CLEAR_FORCE_ACTION,
             async_clear_force_action,
             schema=vol.Schema({}),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_PLAN_OVERRIDES):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_PLAN_OVERRIDES,
+            async_set_plan_overrides,
+            schema=vol.Schema({vol.Required("overrides"): dict}),
         )
     return True
 
@@ -198,3 +221,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+

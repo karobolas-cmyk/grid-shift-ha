@@ -107,7 +107,9 @@ class Decision:
     capacity_tariff_incremental_peak_kw: float = 0.0
     capacity_tariff_estimated_fee: float = 0.0
     selected_slots: tuple[str, ...] = field(default_factory=tuple)
+    control_error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a Home Assistant friendly mapping."""
         return asdict(self)
+

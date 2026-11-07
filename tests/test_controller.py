@@ -1,7 +1,10 @@
 """Tests for the Fronius mode-settle-write sequence."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+
+import pytest
 
 from custom_components.gridshift_battery import controller as controller_module
 from custom_components.gridshift_battery.const import (
@@ -50,6 +53,7 @@ class FakeStorage:
             discharge_enabled=discharge_enabled,
             forced_action=None,
             forced_until=None,
+            plan_overrides={},
         )
 
     async def async_save(self) -> None:
@@ -187,6 +191,55 @@ def test_rate_update_reuses_already_settled_mode() -> None:
     ]
 
 
+def test_rate_update_waits_for_transiently_unavailable_control() -> None:
+    actuator, events = controller()
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"].state = "unavailable"
+    original_sleep = controller_module.asyncio.sleep
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(("sleep", seconds))
+        actuator.hass.states.values["number.grid_charge_power"].state = "0"
+
+    controller_module.asyncio.sleep = fake_sleep
+    try:
+        asyncio.run(actuator.async_apply(Decision("charge", 1789, "test_update")))
+    finally:
+        controller_module.asyncio.sleep = original_sleep
+
+    assert events == [
+        ("sleep", 0.5),
+        (
+            "service",
+            "number",
+            "set_value",
+            {"entity_id": "number.grid_charge_power", "value": 1780},
+        ),
+    ]
+
+
+def test_rate_update_reports_unavailable_control_timeout() -> None:
+    actuator, events = controller()
+    actuator.config[CONF_MODE_SETTLE_SECONDS] = 1
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    actuator.hass.states.values["number.grid_charge_power"].state = "unavailable"
+    original_sleep = controller_module.asyncio.sleep
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(("sleep", seconds))
+
+    controller_module.asyncio.sleep = fake_sleep
+    try:
+        with pytest.raises(RuntimeError, match="stayed unavailable for 1 seconds"):
+            asyncio.run(
+                actuator.async_apply(Decision("charge", 1789, "test_update"))
+            )
+    finally:
+        controller_module.asyncio.sleep = original_sleep
+
+    assert events == [("sleep", 0.5), ("sleep", 0.5)]
+
+
 def test_disarming_grid_discharge_only_returns_to_auto() -> None:
     actuator, events = controller(discharge_enabled=True)
     actuator.storage.state.owns_control = True
@@ -215,4 +268,29 @@ def test_force_action_is_stored_and_can_be_cleared() -> None:
 
     assert actuator.forced_action is None
     assert actuator.forced_until is None
+
+
+def test_plan_override_survives_quarter_boundary() -> None:
+    actuator, _ = controller()
+    now = datetime.now(UTC)
+    next_quarter = now + timedelta(minutes=1)
+
+    asyncio.run(
+        actuator.async_set_plan_overrides({next_quarter.isoformat(): "charge"})
+    )
+
+    assert asyncio.run(
+        actuator.async_active_plan_action(next_quarter + timedelta(minutes=1))
+    ) == "charge"
+
+
+def test_expired_plan_overrides_are_pruned() -> None:
+    actuator, _ = controller()
+    now = datetime.now(UTC)
+    old_quarter = now - timedelta(minutes=20)
+    actuator.storage.state.plan_overrides = {old_quarter.isoformat(): "charge"}
+
+    assert asyncio.run(actuator.async_active_plan_action(now)) is None
+    assert actuator.plan_overrides == {}
+
 

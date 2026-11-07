@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,6 +33,7 @@ class PersistedState:
     discharge_enabled: bool = False
     forced_action: str | None = None
     forced_until: str | None = None
+    plan_overrides: dict[str, str] = field(default_factory=dict)
 
 
 class RuntimeStorage:
@@ -47,6 +48,7 @@ class RuntimeStorage:
             discharge_enabled=bool(raw.get("discharge_enabled", False)),
             forced_action=raw.get("forced_action"),
             forced_until=raw.get("forced_until"),
+            plan_overrides=dict(raw.get("plan_overrides") or {}),
         )
         self.model = ConsumptionModel.from_dict(raw.get("model"))
 
@@ -59,6 +61,7 @@ class RuntimeStorage:
                 "discharge_enabled": self.state.discharge_enabled,
                 "forced_action": self.state.forced_action,
                 "forced_until": self.state.forced_until,
+                "plan_overrides": self.state.plan_overrides,
                 "model": self.model.to_dict(),
             }
         )
@@ -100,6 +103,11 @@ class BatteryController:
         """Return the stored expiry timestamp."""
         return self.storage.state.forced_until
 
+    @property
+    def plan_overrides(self) -> dict[str, str]:
+        """Return a copy of the persisted quarter-hour overrides."""
+        return dict(self.storage.state.plan_overrides)
+
     def _clear_force_state(self) -> None:
         self.storage.state.forced_action = None
         self.storage.state.forced_until = None
@@ -129,6 +137,54 @@ class BatteryController:
         """Clear a manual action and return the next cycle to the price plan."""
         self._clear_force_state()
         await self.storage.async_save()
+
+    async def async_set_plan_overrides(self, overrides: dict[str, str]) -> None:
+        """Replace persisted quarter-hour actions submitted by GridShift."""
+        now = datetime.now(UTC)
+        earliest = now - timedelta(minutes=15)
+        latest = now + timedelta(hours=48)
+        normalized: dict[str, str] = {}
+        for start_text, action in list(overrides.items())[:192]:
+            if action not in {"charge", "idle"}:
+                raise ValueError(f"Unsupported plan action: {action}")
+            try:
+                start = datetime.fromisoformat(str(start_text))
+            except ValueError as err:
+                raise ValueError(f"Invalid plan timestamp: {start_text}") from err
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            start = start.astimezone(UTC)
+            if earliest <= start <= latest:
+                normalized[start.isoformat()] = action
+        self.storage.state.plan_overrides = normalized
+        await self.storage.async_save()
+
+    async def async_active_plan_action(self, now: datetime) -> str | None:
+        """Return the current persisted quarter action and prune old entries."""
+        utc_now = now.astimezone(UTC)
+        active: str | None = None
+        retained: dict[str, str] = {}
+        changed = False
+        for start_text, action in self.storage.state.plan_overrides.items():
+            try:
+                start = datetime.fromisoformat(start_text)
+            except ValueError:
+                changed = True
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            start = start.astimezone(UTC)
+            end = start + timedelta(minutes=15)
+            if end <= utc_now:
+                changed = True
+                continue
+            retained[start.isoformat()] = action
+            if start <= utc_now < end:
+                active = action
+        if changed or retained != self.storage.state.plan_overrides:
+            self.storage.state.plan_overrides = retained
+            await self.storage.async_save()
+        return active
 
     async def async_active_force_action(self, now: datetime) -> str | None:
         """Return an unexpired manual action, clearing stale state."""
@@ -193,12 +249,28 @@ class BatteryController:
         if self._mode() != mode:
             raise RuntimeError(f"Fronius storage mode did not settle to {mode}")
 
+    async def _wait_for_power_entity(self, entity_id: str, mode: str) -> None:
+        """Wait for a mode-specific Fronius number to become writable."""
+        poll_seconds = 0.5
+        timeout_seconds = max(
+            poll_seconds, float(self.config[CONF_MODE_SETTLE_SECONDS])
+        )
+        attempts = max(1, int(timeout_seconds / poll_seconds))
+        for attempt in range(attempts + 1):
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                return
+            if attempt < attempts:
+                await asyncio.sleep(poll_seconds)
+        raise RuntimeError(
+            f"{entity_id} stayed unavailable for {timeout_seconds:g} seconds "
+            f"in {mode} mode"
+        )
+
     async def _enter_mode(self, mode: str, power_entity: str) -> None:
         """Enter a power-control mode and verify its mode-specific entity."""
         await self._settle_mode(mode)
-        state = self.hass.states.get(power_entity)
-        if state is None or state.state in ("unknown", "unavailable"):
-            raise RuntimeError(f"{power_entity} is unavailable in {mode} mode")
+        await self._wait_for_power_entity(power_entity, mode)
 
     async def async_apply(self, decision: Decision) -> str | None:
         """Apply a decision and return an override reason when control is refused."""
@@ -269,3 +341,4 @@ class BatteryController:
         self.storage.state.owns_control = False
         self.last_power_w = 0
         self.last_discharge_power_w = 0
+

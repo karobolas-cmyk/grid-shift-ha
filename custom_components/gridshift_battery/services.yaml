@@ -51,3 +51,19 @@ clear_force_action:
   name: Return to automatic plan
   description: Clears the active manual battery action and refreshes the optimizer.
 
+set_plan_overrides:
+  name: Set quarter-hour plan overrides
+  description: >-
+    Replaces the persisted charge or idle overrides selected in the GridShift
+    price-plan graph. Overrides are keyed by ISO 8601 quarter start time.
+  fields:
+    overrides:
+      name: Overrides
+      description: Mapping from ISO 8601 quarter start to charge or idle.
+      required: true
+      example:
+        "2026-11-07T12:30:00+00:00": charge
+      selector:
+        object:
+
+
