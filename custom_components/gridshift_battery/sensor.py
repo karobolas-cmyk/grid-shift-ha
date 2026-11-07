@@ -199,5 +199,11 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "control_error": data.control_error,
             "control_execution": dict(self.runtime.controller.execution),
             "control_paused_reason": self.runtime.controller.pause_reason,
+            "plan": data.plan,
+            "charge_power_w": data.charge_power_w,
+            "adaptive_target_soc_pct": data.adaptive_target_soc_pct,
+            "energy_needed_kwh": data.energy_needed_kwh,
+            "phase_limit_w": data.phase_limit_w,
+            "phase_headroom_a": data.phase_headroom_a,
         }
 

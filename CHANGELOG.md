@@ -2,6 +2,22 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.12.6 - 2026-11-07
+
+- Rebuild the remaining plan from measured SoC on input updates and at quarter
+  boundaries. Missed charging windows never contribute stored energy.
+- Expose the rolling plan, projected SoC per interval, measured stored reserve,
+  and reserve shortfall on the action sensor, including during forced charging.
+- Allocate charging before the upcoming expensive period instead of relying on
+  cheaper energy that only becomes available after that period.
+- Use only the remaining duration of the active interval for energy allocation.
+- Support deriving house consumption from instantaneous grid import, grid
+  export, solar and measured battery power. Never use a charge setpoint as a
+  battery measurement or count battery charging as household demand.
+- Continue producing a read-only plan while a prior actuator failure is latched;
+  the existing explicit re-enable requirement and bounded write retries remain.
+- Reduce an existing balanced charge when a phase is already above its margin.
+
 ## 0.12.5 - 2026-11-07
 
 - Reject charge/discharge entity mix-ups, including previously saved mappings

@@ -72,6 +72,7 @@ class OptimizerInput:
     capacity_tariff_reference_kw: float = 0.0
     capacity_tariff_start_hour: int = 0
     capacity_tariff_end_hour: int = 24
+    plan_overrides: dict[str, str] = field(default_factory=dict)
 
 
 Action = Literal["charge", "hold", "discharge", "idle", "blocked"]
@@ -108,6 +109,7 @@ class Decision:
     capacity_tariff_estimated_fee: float = 0.0
     selected_slots: tuple[str, ...] = field(default_factory=tuple)
     control_error: str | None = None
+    plan: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         """Return a Home Assistant friendly mapping."""

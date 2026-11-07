@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
 from homeassistant.helpers.storage import Store
 
 from .bridge import (
@@ -19,8 +19,12 @@ from .bridge import (
     validate_configuration,
 )
 from .const import (
+    CONF_BATTERY_CHARGE_SENSOR,
+    CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_ENTITY,
     CONF_EV_POWER_ENTITIES,
     CONF_EV_POWER_ENTITY,
+    CONF_GRID_EXPORT_SENSOR,
     CONF_HOUSE_LOAD_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
@@ -175,6 +179,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         *controller.config[CONF_PHASE_CURRENT_ENTITIES],
     }
     for key in (
+        CONF_BATTERY_POWER_ENTITY,
+        CONF_BATTERY_CHARGE_SENSOR,
+        CONF_BATTERY_DISCHARGE_SENSOR,
+        CONF_GRID_EXPORT_SENSOR,
         CONF_SOLAR_POWER_ENTITY,
         CONF_SOLAR_POWER_ENTITIES,
         CONF_EV_POWER_ENTITY,
@@ -197,6 +205,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             sorted(watched_entities),
             async_input_sensor_changed,
+        )
+    )
+    @callback
+    def async_quarter_changed(now) -> None:
+        """Replan at each quarter boundary even when sensor values are unchanged."""
+        hass.async_create_task(coordinator.async_request_refresh())
+
+    entry.async_on_unload(
+        async_track_time_change(
+            hass, async_quarter_changed, minute=[0, 15, 30, 45], second=0,
         )
     )
     await coordinator.async_config_entry_first_refresh()

@@ -5,10 +5,14 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.gridshift_battery.bridge import validate_configuration
 from custom_components.gridshift_battery.const import (
+    CONF_BATTERY_CHARGE_SENSOR,
+    CONF_BATTERY_DISCHARGE_SENSOR,
+    CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_POWER_ENTITY,
     CONF_CONTROL_MODE_ENTITY,
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_HOUSE_LOAD_ENTITY,
+    CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_PHASE_CURRENT_ENTITIES,
     CONF_PRICE_ENTITY,
     CONF_SOC_ENTITY,
@@ -94,5 +98,41 @@ def test_bridge_rejects_same_entity_for_both_power_roles() -> None:
     configuration = valid_configuration()
     configuration[CONF_DISCHARGE_POWER_ENTITY] = configuration[CONF_CHARGE_POWER_ENTITY]
     with pytest.raises(HomeAssistantError, match="distinct"):
+        validate_configuration(hass, configuration)
+
+
+def test_grid_load_requires_measured_battery_power() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = {**valid_configuration(), CONF_HOUSE_LOAD_IS_GRID_POWER: True}
+    with pytest.raises(HomeAssistantError, match="Grid power includes battery charging"):
+        validate_configuration(hass, configuration)
+
+
+def test_grid_load_accepts_measured_charge_and_discharge_pair() -> None:
+    hass = SimpleNamespace(states=States())
+    hass.states.values["sensor.battery_charge"] = SimpleNamespace(
+        state="10000", attributes={"unit_of_measurement": "W"},
+    )
+    hass.states.values["sensor.battery_discharge"] = SimpleNamespace(
+        state="0", attributes={"unit_of_measurement": "W"},
+    )
+    configuration = {
+        **valid_configuration(), CONF_HOUSE_LOAD_IS_GRID_POWER: True,
+        CONF_BATTERY_CHARGE_SENSOR: "sensor.battery_charge",
+        CONF_BATTERY_DISCHARGE_SENSOR: "sensor.battery_discharge",
+    }
+    assert validate_configuration(hass, configuration) == configuration
+
+
+def test_grid_load_rejects_battery_percentage_as_power() -> None:
+    hass = SimpleNamespace(states=States())
+    hass.states.values["sensor.battery_power"] = SimpleNamespace(
+        state="100", attributes={"unit_of_measurement": "%"},
+    )
+    configuration = {
+        **valid_configuration(), CONF_HOUSE_LOAD_IS_GRID_POWER: True,
+        CONF_BATTERY_POWER_ENTITY: "sensor.battery_power",
+    }
+    with pytest.raises(HomeAssistantError, match="must measure power"):
         validate_configuration(hass, configuration)
 
