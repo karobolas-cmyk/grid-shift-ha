@@ -152,6 +152,7 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
     """Expose one field from the latest optimizer decision."""
 
     entity_description: GridShiftSensorDescription
+    _unrecorded_attributes = frozenset({"plan", "control_execution"})
 
     def __init__(
         self,
