@@ -154,6 +154,7 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
     entity_description: GridShiftSensorDescription
     _unrecorded_attributes = frozenset({
         "plan", "control_execution", "market_prices", "power_snapshot", "thermal_control",
+        "notifications",
     })
 
     def __init__(
@@ -186,8 +187,10 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             return None
         data = self.coordinator.data
         return {
-            "bridge_version": "0.13.1",
-            "capabilities": ["house_consumption_entity", "market_prices", "power_snapshot"],
+            "bridge_version": "0.14.0",
+            "capabilities": [
+                "house_consumption_entity", "market_prices", "power_snapshot", "notifications",
+            ],
             "selected_slots": list(data.selected_slots),
             "current_price": data.current_price,
             "cheap_cutoff": data.cheap_cutoff,
@@ -214,5 +217,6 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             "power_snapshot": self.coordinator.power_snapshot,
             "market_prices": self.coordinator.prices.snapshot,
             "thermal_control": self.coordinator.thermal.snapshot,
+            "notifications": self.coordinator.notifications.snapshot,
         }
 

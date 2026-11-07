@@ -134,6 +134,27 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             raise HomeAssistantError(str(err)) from err
         await runtime.coordinator.async_refresh()
 
+    def notification_coordinator():
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if len(entries) != 1:
+            raise HomeAssistantError("Exactly one configured GridShift entry is required")
+        runtime = hass.data.get(DOMAIN, {}).get(entries[0].entry_id)
+        if runtime is None or runtime.coordinator is None:
+            raise HomeAssistantError("Configure GridShift before enabling notifications")
+        return runtime.coordinator
+
+    async def async_set_notifications(call: ServiceCall) -> None:
+        coordinator = notification_coordinator()
+        await coordinator.notifications.async_configure(call.data["settings"])
+        coordinator.async_update_listeners()
+
+    async def async_test_notifications(call: ServiceCall) -> None:
+        coordinator = notification_coordinator()
+        try:
+            await coordinator.notifications.async_test(dt_util.now())
+        finally:
+            coordinator.async_update_listeners()
+
     if not hass.services.has_service(DOMAIN, SERVICE_APPLY_CONFIGURATION):
         hass.services.async_register(
             DOMAIN,
@@ -168,6 +189,15 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             SERVICE_SET_PLAN_OVERRIDES,
             async_set_plan_overrides,
             schema=vol.Schema({vol.Required("overrides"): dict}),
+        )
+    if not hass.services.has_service(DOMAIN, "set_notifications"):
+        hass.services.async_register(
+            DOMAIN, "set_notifications", async_set_notifications,
+            schema=vol.Schema({vol.Required("settings"): dict}),
+        )
+    if not hass.services.has_service(DOMAIN, "test_notifications"):
+        hass.services.async_register(
+            DOMAIN, "test_notifications", async_test_notifications, schema=vol.Schema({}),
         )
     return True
 
@@ -247,6 +277,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload and safely relinquish battery control."""
     runtime: GridShiftRuntime = hass.data[DOMAIN][entry.entry_id]
     if runtime.coordinator is not None:
+        if runtime.coordinator.notification_task:
+            await runtime.coordinator.notification_task
         if runtime.coordinator.price_task and not runtime.coordinator.price_task.done():
             runtime.coordinator.price_task.cancel()
         if runtime.coordinator.thermal_task:

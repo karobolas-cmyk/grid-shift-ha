@@ -2,6 +2,23 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.14.0 - 2026-11-07
+
+- Add opt-in anomaly push notifications through selected HA Companion App
+  actions or notify entities. Settings and per-recipient deduplication persist
+  in Home Assistant and work with the dashboard closed.
+- Notify on unconfirmed battery/thermostat commands immediately, missing
+  prices or required measurements after five minutes, and a projected reserve
+  deficit of at least 1 kWh sustained for ten minutes. Normal Auto, reserve
+  holding and phase-limited charging do not count as control errors.
+- Send one message per ongoing incident; optionally notify after two healthy
+  minutes. Retry only failed recipients after fifteen minutes. Delivery failure
+  cannot block or change battery control.
+- Add separate set_notifications and test_notifications services so notification
+  settings do not restart the bridge or disable active battery/climate control.
+- Include notification settings, recent delivery attempts and errors in the
+  action sensor's diagnostics. Tests never imply phone delivery confirmation.
+
 ## 0.13.1 - 2026-11-07
 
 - Add an explicit `house_consumption_entity`, independent of grid import and

@@ -58,6 +58,8 @@ class PersistedState:
     price_cache: dict[str, Any] = field(default_factory=dict)
     thermal_enabled: bool = False
     thermal_state: dict[str, Any] = field(default_factory=dict)
+    notification_settings: dict[str, Any] = field(default_factory=dict)
+    notification_state: dict[str, Any] = field(default_factory=dict)
 
 
 class RuntimeStorage:
@@ -77,6 +79,8 @@ class RuntimeStorage:
             price_cache=dict(raw.get("price_cache") or {}),
             thermal_enabled=bool(raw.get("thermal_enabled", False)),
             thermal_state=dict(raw.get("thermal_state") or {}),
+            notification_settings=dict(raw.get("notification_settings") or {}),
+            notification_state=dict(raw.get("notification_state") or {}),
         )
         if self.state.control_fault:
             self.state.enabled = False
@@ -96,6 +100,8 @@ class RuntimeStorage:
                 "price_cache": self.state.price_cache,
                 "thermal_enabled": self.state.thermal_enabled,
                 "thermal_state": self.state.thermal_state,
+                "notification_settings": self.state.notification_settings,
+                "notification_state": self.state.notification_state,
                 "model": self.model.to_dict(),
             }
         )
