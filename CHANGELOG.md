@@ -2,6 +2,21 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.13.1 - 2026-11-07
+
+- Add an explicit `house_consumption_entity`, independent of grid import and
+  battery power. Prefer the fresh total measurement in planning and learning;
+  a saved grid-source setting cannot reinterpret it as grid import.
+- Recognize Fronius `solarnet_power_load_consumed` as total house consumption
+  and Swedish `solarnet_elnat_import` as a grid-meter input.
+- Expose the saved measurement mapping and bridge capabilities to the dashboard.
+- Refresh prices independently of phase-safety failures. Stopping physical
+  control for stale phases no longer leaves price diagnostics uninitialized.
+- Explain current-price-only entities, missing published coverage and service
+  availability in the native price snapshot.
+- Dashboard compatibility keeps published legacy/entity prices available when
+  a native snapshot is missing or empty, without extending expired coverage.
+
 ## 0.13.0 - 2026-11-07
 
 - Persist the chosen price provider in Home Assistant. Support native direct

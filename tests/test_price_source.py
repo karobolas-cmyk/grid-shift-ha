@@ -95,6 +95,8 @@ def test_generic_entity_never_silently_borrows_tibber_prices():
     assert asyncio.run(item.async_prices(NOW)) == ()
     assert item.hass.services.calls == []
     assert item.snapshot["effective_provider"] == "ha_entity"
+    assert item.snapshot["error"] == "price_entity_has_no_forecast"
+    assert item.snapshot["tibber_service_available"]
 
 
 def test_tibber_requires_a_single_home_or_an_explicit_home_selection():

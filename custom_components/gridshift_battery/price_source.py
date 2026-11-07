@@ -218,10 +218,10 @@ class PriceSource:
         )
         entity_id = self.config.get(CONF_PRICE_ENTITY, "")
         state = self.hass.states.get(entity_id) if entity_id else None
+        platform = self._platform(entity_id, state)
         entity_slots = parse_price_slots(getattr(state, "attributes", {}), now)
         effective = provider
         if provider == "auto":
-            platform = self._platform(entity_id, state)
             effective = {"tibber": "ha_tibber", "nordpool": "ha_nordpool"}.get(
                 platform, "ha_entity"
             )
@@ -229,7 +229,7 @@ class PriceSource:
         slots = ()
         error = None
         use_entity = provider in {"auto", "ha_entity"} or (
-            provider == "ha_nordpool" and self._platform(entity_id, state) == "nordpool"
+            provider == "ha_nordpool" and platform == "nordpool"
         )
         if use_entity and len(contiguous_prices(entity_slots, now)) >= 2:
             unit = str(getattr(state, "attributes", {}).get("unit_of_measurement", ""))
@@ -270,7 +270,15 @@ class PriceSource:
             slots = parse_price_slots({"prices": self._cache.get("slots", [])}, now)
         usable = contiguous_prices(slots, now)
         ready = len(usable) >= 2
+        if not ready and not error:
+            error = ("price_entity_has_no_forecast" if effective == "ha_entity"
+                     else "no_published_price_coverage")
         self.snapshot = {
+            "entity_platform": platform,
+            "tibber_service_available": self.hass.services.has_service("tibber", "get_prices"),
+            "nordpool_service_available": self.hass.services.has_service(
+                "nordpool", "get_prices_for_date",
+            ),
             "provider": provider,
             "effective_provider": effective,
             "currency": "SEK",
