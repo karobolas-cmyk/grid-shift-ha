@@ -14,6 +14,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
     CONF_CAPACITY_TARIFF_MODEL,
@@ -264,6 +265,10 @@ def _limits_schema(values: dict[str, Any]) -> vol.Schema:
                 description=suggested(CONF_DISCHARGE_MODE_OPTION),
             ): selector.TextSelector(),
             vol.Required(
+                CONF_BLOCK_DISCHARGE_MODE_OPTION,
+                description=suggested(CONF_BLOCK_DISCHARGE_MODE_OPTION),
+            ): selector.TextSelector(),
+            vol.Required(
                 CONF_AUTO_MODE_OPTION, description=suggested(CONF_AUTO_MODE_OPTION)
             ): selector.TextSelector(),
             vol.Required(
@@ -294,6 +299,7 @@ def _validate_control_modes(
         options,
         auto_mode=values[CONF_AUTO_MODE_OPTION],
         charge_mode=values[CONF_CHARGE_MODE_OPTION],
+        block_discharge_mode=values[CONF_BLOCK_DISCHARGE_MODE_OPTION],
         discharge_mode=(
             values[CONF_DISCHARGE_MODE_OPTION] if discharge_configured else None
         ),

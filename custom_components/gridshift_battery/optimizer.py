@@ -183,6 +183,51 @@ def optimize(data: OptimizerInput) -> Decision:
         "capacity_tariff_incremental_peak_kw": round(active_tariff[2], 3),
         "capacity_tariff_estimated_fee": round(active_tariff[3], 2),
     }
+
+    later_expensive = tuple(
+        slot
+        for slot in future
+        if slot.start >= active.end
+        and slot.price >= expensive_cutoff
+        and _forecast_for_slot(data, slot) > 100
+    )
+    stored_energy_kwh = data.battery_capacity_kwh * max(
+        0.0, data.soc_pct - data.min_soc_pct
+    ) / 100
+    later_required_energy_kwh = sum(
+        _forecast_for_slot(data, slot) * slot.duration_hours / 1000
+        for slot in later_expensive
+    )
+    later_peak_price = max(
+        (slot.price for slot in later_expensive), default=active.price
+    )
+    hold_minimum_gain = max(0.01, abs(active.price)) * (
+        data.min_savings_percent / 100
+    )
+    hold_phase_reserve_a = data.max_discharge_power_w / max(
+        1.0, data.nominal_voltage_v * 3
+    )
+    should_hold = (
+        stored_energy_kwh > 0.05
+        and later_required_energy_kwh > 0.05
+        and active.price < expensive_cutoff
+        and later_peak_price - active.price >= hold_minimum_gain
+        and headroom >= hold_phase_reserve_a
+    )
+
+    def idle_or_hold(
+        reason: str, selected_slots: tuple[str, ...] = ()
+    ) -> Decision:
+        if should_hold:
+            return Decision(
+                "hold",
+                0,
+                "battery_reserved_for_later_peak",
+                selected_slots=selected_slots,
+                **base,
+            )
+        return Decision("idle", 0, reason, selected_slots=selected_slots, **base)
+
     discharge_reserve_soc = max(data.min_soc_pct, adaptive_target)
     discharge_energy_kwh = data.battery_capacity_kwh * max(
         0.0, data.soc_pct - discharge_reserve_soc
@@ -213,14 +258,14 @@ def optimize(data: OptimizerInput) -> Decision:
                 **base,
             )
     if grid_energy_needed_kwh <= 0.01:
-        return Decision("idle", 0, "adaptive_target_reached", **base)
+        return idle_or_hold("adaptive_target_reached")
     if profitable_reference - active_effective_price < minimum_gain:
         reason = (
             "capacity_tariff_peak_avoided"
             if active_tariff[3] > 0
             else "price_spread_too_small"
         )
-        return Decision("idle", 0, reason, **base)
+        return idle_or_hold(reason)
     if phase_limit_w < 100:
         return Decision("blocked", 0, "phase_capacity_exhausted", **base)
 
@@ -245,9 +290,7 @@ def optimize(data: OptimizerInput) -> Decision:
             if active_tariff[3] > 0
             else "cheaper_slots_available"
         )
-        return Decision(
-            "idle", 0, reason, selected_slots=selected_starts, **base
-        )
+        return idle_or_hold(reason, selected_starts)
 
     # Fronius documents 10 W increments for Grid Charge Power.
     command = max(0, min(active_plan, phase_limit_w, data.max_charge_power_w))

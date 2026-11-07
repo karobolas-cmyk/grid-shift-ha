@@ -73,7 +73,7 @@ class OptimizerInput:
     capacity_tariff_end_hour: int = 24
 
 
-Action = Literal["charge", "discharge", "idle", "blocked"]
+Action = Literal["charge", "hold", "discharge", "idle", "blocked"]
 
 
 @dataclass(frozen=True, slots=True)

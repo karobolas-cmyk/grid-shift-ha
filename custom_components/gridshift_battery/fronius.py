@@ -10,11 +10,14 @@ def missing_control_modes(
     *,
     auto_mode: str,
     charge_mode: str,
+    block_discharge_mode: str | None = None,
     discharge_mode: str | None = None,
 ) -> tuple[str, ...]:
     """Return configured GridShift modes that the Fronius select does not expose."""
     available = set(available_options)
     required = [auto_mode, charge_mode]
+    if block_discharge_mode:
+        required.append(block_discharge_mode)
     if discharge_mode:
         required.append(discharge_mode)
     return tuple(mode for mode in required if mode not in available)

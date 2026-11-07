@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from custom_components.gridshift_battery import controller as controller_module
 from custom_components.gridshift_battery.const import (
     CONF_AUTO_MODE_OPTION,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CHARGE_MODE_OPTION,
     CONF_CHARGE_POWER_ENTITY,
     CONF_CONTROL_MODE_ENTITY,
@@ -59,6 +60,7 @@ def config() -> dict[str, object]:
         CONF_CHARGE_POWER_ENTITY: "number.grid_charge_power",
         CONF_DISCHARGE_POWER_ENTITY: "number.grid_discharge_power",
         CONF_CHARGE_MODE_OPTION: "Charge from Grid",
+        CONF_BLOCK_DISCHARGE_MODE_OPTION: "Block Discharging",
         CONF_DISCHARGE_MODE_OPTION: "Discharge to Grid",
         CONF_AUTO_MODE_OPTION: "Auto",
         CONF_MODE_SETTLE_SECONDS: 20,
@@ -99,6 +101,27 @@ def test_charge_changes_mode_waits_then_writes_power() -> None:
     assert events[1] == ("sleep", 20.0)
     assert events[2][1:3] == ("number", "set_value")
     assert events[2][3] == {"entity_id": "number.grid_charge_power", "value": 2340}
+
+
+def test_hold_changes_mode_waits_without_writing_power() -> None:
+    actuator, events = controller()
+    original_sleep = controller_module.asyncio.sleep
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(("sleep", seconds))
+
+    controller_module.asyncio.sleep = fake_sleep
+    try:
+        asyncio.run(
+            actuator.async_apply(Decision("hold", 0, "battery_reserved_for_later_peak"))
+        )
+    finally:
+        controller_module.asyncio.sleep = original_sleep
+
+    assert events[0][1:3] == ("select", "select_option")
+    assert events[0][3]["option"] == "Block Discharging"
+    assert events[1] == ("sleep", 20.0)
+    assert len(events) == 2
 
 
 def test_release_only_returns_to_auto() -> None:

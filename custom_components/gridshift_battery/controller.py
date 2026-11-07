@@ -11,6 +11,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_AUTO_MODE_OPTION,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CHARGE_MODE_OPTION,
     CONF_CHARGE_POWER_ENTITY,
     CONF_CONTROL_MODE_ENTITY,
@@ -119,13 +120,17 @@ class BatteryController:
         )
         return rounded
 
-    async def _enter_mode(self, mode: str, power_entity: str) -> None:
-        """Select a Fronius mode, wait for it to settle, then verify its control."""
+    async def _settle_mode(self, mode: str) -> None:
+        """Select a Fronius mode, wait for it to settle, then verify it."""
         if self._mode() != mode:
             await self._set_mode(mode)
             await asyncio.sleep(max(0, float(self.config[CONF_MODE_SETTLE_SECONDS])))
         if self._mode() != mode:
             raise RuntimeError(f"Fronius storage mode did not settle to {mode}")
+
+    async def _enter_mode(self, mode: str, power_entity: str) -> None:
+        """Enter a power-control mode and verify its mode-specific entity."""
+        await self._settle_mode(mode)
         state = self.hass.states.get(power_entity)
         if state is None or state.state in ("unknown", "unavailable"):
             raise RuntimeError(f"{power_entity} is unavailable in {mode} mode")
@@ -137,10 +142,11 @@ class BatteryController:
 
         auto = self.config[CONF_AUTO_MODE_OPTION]
         charging = self.config[CONF_CHARGE_MODE_OPTION]
+        holding = self.config[CONF_BLOCK_DISCHARGE_MODE_OPTION]
         discharging = self.config[CONF_DISCHARGE_MODE_OPTION]
         discharge_entity = self.config.get(CONF_DISCHARGE_POWER_ENTITY)
         mode = self._mode()
-        allowed_modes = {auto, charging}
+        allowed_modes = {auto, charging, holding}
         if self.discharge_enabled and discharge_entity:
             allowed_modes.add(discharging)
         if mode not in allowed_modes:
@@ -158,6 +164,11 @@ class BatteryController:
             self.last_power_w = await self._set_power(
                 self.config[CONF_CHARGE_POWER_ENTITY], decision.charge_power_w
             )
+            self.last_discharge_power_w = 0
+            self.storage.state.owns_control = True
+        elif decision.action == "hold":
+            await self._settle_mode(holding)
+            self.last_power_w = 0
             self.last_discharge_power_w = 0
             self.storage.state.owns_control = True
         elif decision.action == "discharge" and decision.discharge_power_w > 0:
@@ -181,9 +192,10 @@ class BatteryController:
     async def async_release_control(self) -> None:
         """Return to Auto without writing a mode-specific power control."""
         charging = self.config[CONF_CHARGE_MODE_OPTION]
+        holding = self.config[CONF_BLOCK_DISCHARGE_MODE_OPTION]
         discharging = self.config[CONF_DISCHARGE_MODE_OPTION]
         mode = self._mode()
-        controlled_mode = mode == charging or (
+        controlled_mode = mode in {charging, holding} or (
             mode == discharging
             and (self.storage.state.owns_control or self.discharge_enabled)
         )

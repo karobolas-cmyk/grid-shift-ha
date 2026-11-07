@@ -11,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
     CONF_CAPACITY_TARIFF_MODEL,
@@ -83,6 +84,7 @@ REQUIRED_FIELDS = {
 SETTING_FIELDS = {
     CONF_AUTO_MODE_OPTION,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_ENABLED,
     CONF_CAPACITY_TARIFF_END_HOUR,
     CONF_CAPACITY_TARIFF_MODEL,
@@ -123,6 +125,7 @@ BOOLEAN_FIELDS = {
 }
 STRING_FIELDS = {
     CONF_AUTO_MODE_OPTION,
+    CONF_BLOCK_DISCHARGE_MODE_OPTION,
     CONF_CAPACITY_TARIFF_MODEL,
     CONF_CHARGE_MODE_OPTION,
     CONF_DISCHARGE_MODE_OPTION,
@@ -233,6 +236,9 @@ def validate_configuration(
 
     auto_mode = str(result.get(CONF_AUTO_MODE_OPTION, "Auto"))
     charge_mode = str(result.get(CONF_CHARGE_MODE_OPTION, "Charge from Grid"))
+    block_discharge_mode = str(
+        result.get(CONF_BLOCK_DISCHARGE_MODE_OPTION, "Block Discharging")
+    )
     discharge_entity = result.get(CONF_DISCHARGE_POWER_ENTITY)
     discharge_mode = str(result.get(CONF_DISCHARGE_MODE_OPTION, "Discharge to Grid"))
     mode_state = hass.states.get(result[CONF_CONTROL_MODE_ENTITY])
@@ -241,6 +247,7 @@ def validate_configuration(
         options,
         auto_mode=auto_mode,
         charge_mode=charge_mode,
+        block_discharge_mode=block_discharge_mode,
         discharge_mode=discharge_mode if discharge_entity else None,
     )
     if missing_modes:

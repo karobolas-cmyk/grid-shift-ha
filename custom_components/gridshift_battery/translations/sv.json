@@ -61,6 +61,7 @@
           "heating_reserve_kw_per_c": "Värmereserv per grad",
           "charge_mode_option": "Fronius-alternativ för nätladdning",
           "discharge_mode_option": "Fronius-alternativ för näturladdning",
+          "block_discharge_mode_option": "Fronius-alternativ för blockerad urladdning",
           "auto_mode_option": "Fronius-alternativ för automatläge",
           "mode_settle_seconds": "Väntetid efter byte av Fronius-läge"
         }
@@ -73,7 +74,7 @@
       "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
       "invalid_energy_selection": "Energimappningen kunde inte läsas. Granska valda entiteter och försök igen.",
       "configuration_step_failed": "Nästa inställningssida kunde inte öppnas. Kontrollera Home Assistant-loggen för det detaljerade GridShift-felet.",
-      "required_control_modes_missing": "Den valda lagringsstyrningen saknar Auto, Charge from Grid eller det valfria läget Discharge to Grid."
+      "required_control_modes_missing": "Den valda lagringsstyrningen måste ha Auto, Charge from Grid, Block Discharging och det valfria läget Discharge to Grid."
     },
     "abort": {
       "already_configured": "Det här Fronius-batteriet är redan konfigurerat."
@@ -112,6 +113,7 @@
           "heating_reserve_kw_per_c": "Värmereserv per grad",
           "charge_mode_option": "Fronius-alternativ för nätladdning",
           "discharge_mode_option": "Fronius-alternativ för näturladdning",
+          "block_discharge_mode_option": "Fronius-alternativ för blockerad urladdning",
           "auto_mode_option": "Fronius-alternativ för automatläge",
           "mode_settle_seconds": "Väntetid efter byte av Fronius-läge"
         }
