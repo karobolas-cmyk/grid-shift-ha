@@ -39,6 +39,21 @@ uses its `Storage Control Mode`, `Grid Charge Power`, and optional
 Open the private live-control dashboard:
 [GridShift Battery Optimizer](https://gridshift-battery-lab-6ddf9da3.exactmatch.chatgpt.site).
 
+### Thermostat temperature adjustment
+
+In **Thermostats**, choose a temperature adjustment policy independently for
+each zone. **Raise and lower** retains the existing behavior. **Reduce and
+restore** prevents heating above the zone baseline and allows returning to it;
+in cooling mode it prevents pre-cooling below the baseline.
+
+**Only reduce · restore manually** is stricter and applies to heating only:
+GridShift never raises the target above its current value, including when prices
+fall, weather/prices disappear, or automatic climate control is disabled.
+The user restores the temperature manually. The configured minimum, device step,
+manual override pause and phase protections remain respected. An automatic
+switch to cooling or a dual heating/cooling mode pauses this strict policy.
+Existing zones keep their previous behavior until a different policy is saved.
+
 ### Anomaly push notifications
 
 From **Home → Push notifications** in GridShift, choose one or more phones,

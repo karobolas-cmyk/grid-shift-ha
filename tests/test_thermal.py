@@ -4,6 +4,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.gridshift_battery.const import DEFAULTS
 from custom_components.gridshift_battery.models import PriceSlot
 from custom_components.gridshift_battery.thermal import ThermalController, thermal_target
@@ -137,6 +139,129 @@ def test_missing_prices_returns_an_owned_target_to_baseline():
     evaluate(controller, NOW + timedelta(minutes=6), slots=())
     assert len(calls) == 2
     assert states["climate.living_room"].attributes["temperature"] == 21
+
+
+@pytest.mark.parametrize("policy", ["setback_only", "lower_only"])
+def test_restricted_heating_never_preheats_above_baseline(policy):
+    rule = {**RULE, "adjustment": policy}
+    controller, states, calls = setup(enabled=True, rules=[rule])
+    evaluate(controller)
+    assert calls == []
+    assert thermal_target(rule, states[RULE["entity_id"]], SLOTS, NOW, 5)["temperature"] == 21
+
+
+def test_setback_can_restore_baseline_but_never_overheat():
+    rule = {**RULE, "adjustment": "setback_only"}
+    controller, states, calls = setup(enabled=True, rules=[rule])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    assert states[RULE["entity_id"]].attributes["temperature"] == 20
+    evaluate(controller, NOW + timedelta(minutes=6), slots=SLOTS)
+    assert [call[2]["temperature"] for call in calls] == [20, 21]
+
+
+@pytest.mark.parametrize("missing", ["none", "prices", "weather"])
+def test_lower_only_does_not_recover_automatically_when_prices_fall_or_data_disappears(missing):
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    assert states[RULE["entity_id"]].attributes["temperature"] == 20
+    if missing == "weather":
+        states.pop("sensor.outdoor")
+    evaluate(controller, NOW + timedelta(minutes=6), slots=() if missing == "prices" else SLOTS)
+    assert [call[2]["temperature"] for call in calls] == [20]
+
+
+def test_lower_only_disable_leaves_temperature_for_manual_restoration():
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    asyncio.run(controller.async_set_enabled(False, NOW + timedelta(minutes=1)))
+    assert [call[2]["temperature"] for call in calls] == [20]
+    assert states[RULE["entity_id"]].attributes["temperature"] == 20
+    zone = controller.storage.state.thermal_state[RULE["entity_id"]]
+    assert zone["status"] == "manual_restore_required"
+    assert "original" not in zone
+
+
+def test_lower_only_policy_survives_restart_and_zone_removal():
+    controller, _, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    restored = ThermalController(
+        controller.hass, {**controller.config, "climate_rules": []}, controller.storage,
+    )
+    asyncio.run(restored.async_release(NOW + timedelta(minutes=1)))
+    assert [call[2]["temperature"] for call in calls] == [20]
+
+
+def test_lower_only_does_not_increase_a_lower_manual_setting_or_decrease_below_its_band():
+    rule = {**RULE, "adjustment": "lower_only"}
+    _, states, _ = setup()
+    entity = states[RULE["entity_id"]]
+    entity.attributes["temperature"] = 19
+    assert thermal_target(rule, entity, SLOTS, NOW, 5)["temperature"] == 19
+
+
+@pytest.mark.parametrize("direction", ["cool", "heat_cool"])
+def test_lower_only_does_not_turn_into_extra_cooling(direction):
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    states[RULE["entity_id"]].state = direction
+    evaluate(controller)
+    assert calls == []
+    assert controller.snapshot["zones"][0]["status"] == "lower_only_requires_heating"
+
+
+def test_step_rounding_never_raises_above_baseline_or_current_target():
+    _, states, _ = setup()
+    entity = states[RULE["entity_id"]]
+    entity.attributes["temperature"] = 20.5
+    rule = {**RULE, "baseline": 20.3, "adjustment": "setback_only"}
+    assert thermal_target(rule, entity, SLOTS, NOW, 5)["temperature"] == 20
+    rule = {**RULE, "adjustment": "lower_only"}
+    assert thermal_target(rule, entity, SLOTS, NOW, 5)["temperature"] <= 20.5
+
+
+def test_final_lower_only_guard_rechecks_a_manual_change_during_persistence():
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    entity = states[RULE["entity_id"]]
+
+    async def save():
+        entity.attributes["temperature"] = 20
+
+    controller.storage.async_save = save
+    asyncio.run(controller._write(RULE["entity_id"], {"temperature": 21}, NOW, {}))
+    assert calls == []
+
+
+def test_lower_only_preserves_a_manual_temperature_restoration():
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    states[RULE["entity_id"]].attributes["temperature"] = 21
+    evaluate(controller, NOW + timedelta(minutes=6), slots=expensive)
+    assert len(calls) == 1
+    assert controller.snapshot["zones"][0]["status"] == "manual_override"
+
+
+def test_lower_only_release_in_cooling_does_not_leave_a_failed_restore_loop():
+    controller, states, calls = setup(enabled=True, rules=[{**RULE, "adjustment": "lower_only"}])
+    expensive = tuple(PriceSlot(row.start, row.end, 6 - row.price) for row in SLOTS)
+    evaluate(controller, slots=expensive)
+    states[RULE["entity_id"]].state = "cool"
+    asyncio.run(controller.async_set_enabled(False, NOW + timedelta(minutes=1)))
+    assert len(calls) == 1
+    zone = controller.storage.state.thermal_state[RULE["entity_id"]]
+    assert zone["status"] == "manual_restore_required"
+    assert "original" not in zone
+
+
+def test_no_preheating_policy_also_prevents_precooling():
+    _, states, _ = setup()
+    entity = states[RULE["entity_id"]]
+    entity.state = "cool"
+    target = thermal_target({**RULE, "adjustment": "setback_only"}, entity, SLOTS, NOW, 30)
+    assert target["temperature"] >= RULE["baseline"]
 
 
 def test_service_success_without_matching_target_is_not_confirmed():
