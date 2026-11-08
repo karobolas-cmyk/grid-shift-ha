@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.gridshift_battery.const import DEFAULTS
 from custom_components.gridshift_battery.models import PriceSlot
@@ -83,6 +84,32 @@ def evaluate(controller, now=NOW, slots=SLOTS, currents=(1, 2, 3), stale=()):
 def test_thermostat_control_is_off_until_separately_enabled():
     controller, _, calls = setup()
     evaluate(controller)
+    assert calls == []
+
+
+def test_empty_climate_configuration_returns_a_validation_error_without_enabling():
+    controller, _, calls = setup(rules=[])
+    assert controller.snapshot["configured_zone_count"] == 0
+    with pytest.raises(ServiceValidationError, match="No thermostat zones are saved"):
+        asyncio.run(controller.async_set_enabled(True, NOW))
+    assert controller.enabled is False
+    assert calls == []
+
+
+def test_saved_zone_count_is_available_before_and_after_the_first_evaluation():
+    controller, _, calls = setup()
+    assert controller.snapshot["configured_zone_count"] == 1
+    asyncio.run(controller.async_set_enabled(True, NOW))
+    assert controller.enabled is True
+    evaluate(controller)
+    assert controller.snapshot["configured_zone_count"] == 1
+    assert len(calls) == 1
+
+
+def test_empty_climate_configuration_can_always_be_disabled():
+    controller, _, calls = setup(enabled=True, rules=[])
+    asyncio.run(controller.async_set_enabled(False, NOW))
+    assert controller.enabled is False
     assert calls == []
 
 

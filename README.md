@@ -42,7 +42,10 @@ Open the private live-control dashboard:
 ### Thermostat temperature adjustment
 
 In **Thermostats**, choose a temperature adjustment policy independently for
-each zone. **Raise and lower** retains the existing behavior. **Reduce and
+each zone, save the configuration to Home Assistant, then enable automatic
+climate control. The dashboard checks that HA has saved zones before enabling;
+HA also rejects an empty configuration with a clear validation error.
+**Raise and lower** retains the existing behavior. **Reduce and
 restore** prevents heating above the zone baseline and allows returning to it;
 in cooling mode it prevents pre-cooling below the baseline.
 
