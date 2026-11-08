@@ -111,6 +111,10 @@ class Decision:
     control_error: str | None = None
     reserve_start: str | None = None
     reserve_end: str | None = None
+    later_reserve_kwh: float | None = None
+    available_for_home_kwh: float | None = None
+    home_demand_kwh: float | None = None
+    cheap_recharge_available: bool = False
     plan: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:

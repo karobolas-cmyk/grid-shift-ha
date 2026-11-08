@@ -194,6 +194,116 @@ def test_hold_requires_phase_margin_for_lost_battery_support() -> None:
     )
     assert decision.action != "hold"
 
+
+def reserve_gap_scenario(soc: float = 70) -> OptimizerInput:
+    """A moderate-price gap before four dearer hours and a cheap refill."""
+    return scenario(
+        prices=[1.5, 1.6, 1.7, 2.8, 3.0, 3.2, 0.3, 0.3, 0.3, 0.3], soc=soc,
+    )
+
+
+def test_surplus_battery_supplies_home_in_a_gap_without_spending_later_reserve() -> None:
+    decision = optimize(reserve_gap_scenario())
+    assert decision.action == "idle"  # Native Auto/self-consumption, not grid export.
+    assert decision.reason == "battery_surplus_available_for_home"
+    assert decision.later_reserve_kwh == 4
+    assert decision.available_for_home_kwh == 1.5
+    assert decision.available_for_home_kwh > decision.home_demand_kwh
+    assert decision.charge_power_w == decision.discharge_power_w == 0
+    assert decision.plan["rows"][0]["projected_soc_end_pct"] > 15
+
+
+def test_gap_is_reserved_when_the_battery_cannot_cover_the_gap_and_later_peaks() -> None:
+    decision = optimize(reserve_gap_scenario(soc=60))
+    assert decision.action == "hold"
+    assert decision.later_reserve_kwh == 4
+    assert decision.available_for_home_kwh == 0.5
+    assert decision.available_for_home_kwh < decision.home_demand_kwh
+
+
+def test_lower_real_consumption_releases_a_gap_on_the_next_measured_soc_pass() -> None:
+    data = reserve_gap_scenario(soc=70)
+    data = replace(
+        data,
+        price_slots=(replace(data.price_slots[0], price=3.1), *data.price_slots[1:]),
+        forecasts=(replace(data.forecasts[0], house_w=2000), *data.forecasts[1:]),
+    )
+    projected_soc = optimize(data).plan["rows"][0]["projected_soc_end_pct"]
+    at = data.price_slots[1].start
+    expected = replace(data, now=at, soc_pct=projected_soc)
+    actual = replace(data, now=at, soc_pct=68)
+    assert optimize(expected).action == "hold"
+    released = optimize(actual)
+    assert released.action == "idle"
+    assert released.reason == "battery_surplus_available_for_home"
+    assert released.plan["actual_soc_pct"] == 68
+    assert released.plan["generated_at"] == at.isoformat()
+
+
+def test_higher_real_consumption_can_restore_reserve_between_quarter_boundaries() -> None:
+    data = reserve_gap_scenario(soc=70)
+    assert optimize(data).action == "idle"
+    depleted = replace(data, now=data.now + timedelta(seconds=30), soc_pct=60)
+    assert optimize(depleted).action == "hold"
+
+
+def test_cheap_profitable_quarter_charges_instead_of_releasing_battery_to_home() -> None:
+    data = reserve_gap_scenario(soc=20)
+    first = replace(data.price_slots[0], price=0.2)
+    decision = optimize(replace(data, price_slots=(first, *data.price_slots[1:])))
+    assert decision.cheap_recharge_available is True
+    assert decision.action == "charge"
+    assert decision.charge_power_w > 0
+    assert decision.charge_power_w <= decision.phase_limit_w
+
+
+def test_cheap_quarter_preserves_energy_when_the_charging_target_is_already_met() -> None:
+    data = reserve_gap_scenario(soc=80)
+    first = replace(data.price_slots[0], price=0.2)
+    decision = optimize(replace(data, price_slots=(first, *data.price_slots[1:])))
+    assert decision.available_for_home_kwh > decision.home_demand_kwh
+    assert decision.energy_needed_kwh == 0
+    assert decision.cheap_recharge_available is True
+    assert decision.action == "hold"
+
+
+def test_a_refill_only_offsets_peaks_after_the_refill_and_honors_manual_off() -> None:
+    data = reserve_gap_scenario(soc=70)
+    # Put one cheap recharge before the peaks. It can cover the entire 4 kWh
+    # reserve, but the manual Off choice must remove that capacity again.
+    cheap = replace(data.price_slots[1], price=0.3)
+    data = replace(data, price_slots=(data.price_slots[0], cheap, *data.price_slots[2:]))
+    available = optimize(data)
+    assert available.later_reserve_kwh == 0
+    unavailable = optimize(replace(data, plan_overrides={cheap.start.isoformat(): "idle"}))
+    assert unavailable.later_reserve_kwh == 4
+
+
+def test_a_short_refill_cannot_release_energy_still_needed_for_later_peaks() -> None:
+    data = reserve_gap_scenario(soc=60)
+    cheap = replace(
+        data.price_slots[1], price=0.3, end=data.price_slots[1].start + timedelta(minutes=15),
+    )
+    data = replace(data, price_slots=(data.price_slots[0], cheap, *data.price_slots[2:]))
+    decision = optimize(data)
+    assert decision.later_reserve_kwh == 2.9  # 4 kWh minus 5 kW × 0.25 h × 0.88.
+
+
+def test_manual_quarter_choice_keeps_precedence_over_surplus_release() -> None:
+    decision = optimize(replace(reserve_gap_scenario(), force_action="charge"))
+    assert decision.action == "charge"
+    assert decision.reason == "manual_force_charge"
+
+
+def test_winter_heating_buffer_remains_reserved_before_releasing_surplus() -> None:
+    data = replace(
+        reserve_gap_scenario(), winter_active=True, outdoor_temperature_c=0,
+        heating_balance_temp_c=8, heating_reserve_kw_per_c=0.0625,
+    )
+    decision = optimize(data)
+    assert decision.later_reserve_kwh == 6
+    assert decision.action == "hold"
+
 def test_manual_force_charge_does_not_require_price_forecast() -> None:
     decision = optimize(
         replace(

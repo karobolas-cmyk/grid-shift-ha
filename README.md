@@ -72,6 +72,13 @@ or arbitrary message/service is exposed through the dashboard relay.
 
 ## Highlights
 
+- Reserve versus self-consumption is reassessed every 30 seconds from measured
+  state of charge and the remaining demand forecast. Surplus energy can supply
+  the house between price peaks when it covers the current quarter and the
+  remaining higher-price reserve. Profitable cheap quarters prefer charging to
+  the recalculated target; if the target is met, cheap energy is preserved.
+  Future refills only reduce the reserve by what phase limits and efficiency
+  allow, and manually disabled charging windows are never credited as refills.
 - 15-minute prices and 96 planning intervals per day.
 - Native Tibber price retrieval through Home Assistant.
 - Home Assistant Nord Pool support plus an experimental direct Nord Pool source
