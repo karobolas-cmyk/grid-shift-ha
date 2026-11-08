@@ -6,6 +6,8 @@ import asyncio
 from datetime import datetime, timedelta
 from math import ceil, floor, isfinite
 
+from homeassistant.exceptions import ServiceValidationError
+
 from .measurements import report_time
 from .price import current_slot
 from .safety import sensor_age_seconds
@@ -166,7 +168,10 @@ class ThermalController:
 
     def __init__(self, hass, config: dict, storage) -> None:
         self.hass, self.config, self.storage = hass, config, storage
-        self.snapshot = {"enabled": self.enabled, "zones": []}
+        self.snapshot = {
+            "enabled": self.enabled, "zones": [],
+            "configured_zone_count": len(self.config.get("climate_rules", [])),
+        }
         self._lock = asyncio.Lock()
         self._weather_at = None
         self._weather = []
@@ -190,7 +195,10 @@ class ThermalController:
 
     async def async_set_enabled(self, enabled: bool, now: datetime) -> None:
         if enabled and not self.config.get("climate_rules"):
-            raise ValueError("Select thermostat zones and save their limits first")
+            raise ServiceValidationError(
+                "No thermostat zones are saved. Select zones in GridShift and save the "
+                "configuration to Home Assistant before enabling climate control."
+            )
         self.storage.state.thermal_enabled = enabled
         await self.storage.async_save()
         if not enabled:
@@ -469,6 +477,7 @@ class ThermalController:
                 can_write = False
             self.snapshot = {
                 "enabled": self.enabled,
+                "configured_zone_count": len(self.config.get("climate_rules", [])),
                 "evaluated_at": now.isoformat(),
                 "outdoor_temperature": outdoor,
                 "zones": rows,
