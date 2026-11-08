@@ -64,6 +64,20 @@ def _remaining_hours(data: OptimizerInput, slot: PriceSlot) -> float:
     return max(0.0, (slot.end - max(slot.start, data.now)).total_seconds() / 3600)
 
 
+def _can_recharge(
+    data: OptimizerInput, slot: PriceSlot, cheap_cutoff: float,
+    expensive_cutoff: float, effective_price: float,
+) -> bool:
+    """Only credit profitable recharge windows that allow grid charging."""
+    reference = expensive_cutoff * data.round_trip_efficiency - data.cycle_cost
+    return (
+        slot.price <= cheap_cutoff and slot.price < expensive_cutoff
+        and reference - effective_price
+        >= max(0.01, abs(slot.price)) * data.min_savings_percent / 100
+        and data.plan_overrides.get(slot.start.isoformat()) != "idle"
+    )
+
+
 def _capacity_tariff_factor(model: str) -> float:
     """Return one new peak's share of the configured demand-charge model."""
     return {
@@ -200,16 +214,11 @@ def _optimize_once(data: OptimizerInput) -> Decision:
     # Work backwards through the demand. A short cheap window only offsets the
     # energy it can physically deliver; it cannot erase the next price peak's
     # entire reserve requirement merely because its price is low.
-    recharge_reference = expensive_cutoff * data.round_trip_efficiency - data.cycle_cost
     for slot in reversed(protected):
         hours = _remaining_hours(data, slot)
-        can_recharge = (
-            slot.price <= cheap_cutoff and slot.price < expensive_cutoff
-            and recharge_reference - effective_prices[slot]
-            >= max(0.01, abs(slot.price)) * data.min_savings_percent / 100
-            and data.plan_overrides.get(slot.start.isoformat()) != "idle"
-        )
-        if can_recharge:
+        if _can_recharge(
+            data, slot, cheap_cutoff, expensive_cutoff, effective_prices[slot],
+        ):
             capacity = phase_limit_w * hours * data.round_trip_efficiency / 1000
             expensive_load_kwh = max(0.0, expensive_load_kwh - capacity)
             if expensive_load_kwh <= 0.001:
@@ -280,10 +289,6 @@ def _optimize_once(data: OptimizerInput) -> Decision:
     stored_energy_kwh = data.battery_capacity_kwh * max(
         0.0, data.soc_pct - data.min_soc_pct
     ) / 100
-    later_required_energy_kwh = sum(
-        _forecast_for_slot(data, slot) * _remaining_hours(data, slot) / 1000
-        for slot in later_expensive
-    )
     later_peak_price = max(
         (slot.price for slot in later_expensive), default=active.price
     )
@@ -293,15 +298,50 @@ def _optimize_once(data: OptimizerInput) -> Decision:
     hold_phase_reserve_a = data.max_discharge_power_w / max(
         1.0, data.nominal_voltage_v * 3
     )
-    should_hold = (
+    # Reassess the remaining peaks from measured SoC on every pass. Work
+    # backwards so a feasible refill only offsets peaks after that refill.
+    later_required_energy_kwh = 0.0
+    for slot in reversed(future):
+        if slot.start < active.end:
+            continue
+        hours = _remaining_hours(data, slot)
+        if _can_recharge(
+            data, slot, cheap_cutoff, expensive_cutoff, effective_prices[slot],
+        ):
+            later_required_energy_kwh = max(
+                0.0, later_required_energy_kwh
+                - phase_limit_w * hours * data.round_trip_efficiency / 1000,
+            )
+        elif slot in later_expensive and slot.price - active.price >= hold_minimum_gain:
+            later_required_energy_kwh += (
+                _forecast_for_slot(data, slot) / 1000 + reserve_kw
+            ) * hours
+    home_demand_kwh = _forecast_for_slot(data, active) * _remaining_hours(data, active) / 1000
+    available_for_home_kwh = max(0.0, stored_energy_kwh - later_required_energy_kwh)
+    cheap_recharge_available = _can_recharge(
+        data, active, cheap_cutoff, expensive_cutoff, active_effective_price,
+    )
+    reserve_relevant = (
         stored_energy_kwh > 0.05
-        and later_required_energy_kwh > 0.05
+        and bool(later_expensive)
         and active.price < expensive_cutoff
         and later_peak_price - active.price >= hold_minimum_gain
         and headroom + data.previous_charge_power_w / max(
             1.0, data.nominal_voltage_v * 3
         ) >= hold_phase_reserve_a
     )
+    should_hold = reserve_relevant and (
+        cheap_recharge_available or (
+            later_required_energy_kwh > 0.05
+            and available_for_home_kwh < home_demand_kwh + 0.05
+        )
+    )
+    base.update({
+        "later_reserve_kwh": round(later_required_energy_kwh, 3),
+        "available_for_home_kwh": round(available_for_home_kwh, 3),
+        "home_demand_kwh": round(home_demand_kwh, 3),
+        "cheap_recharge_available": cheap_recharge_available,
+    })
 
     def idle_or_hold(
         reason: str, selected_slots: tuple[str, ...] = ()
@@ -314,7 +354,11 @@ def _optimize_once(data: OptimizerInput) -> Decision:
                 selected_slots=selected_slots,
                 **base,
             )
-        return Decision("idle", 0, reason, selected_slots=selected_slots, **base)
+        return Decision(
+            "idle", 0,
+            "battery_surplus_available_for_home" if reserve_relevant else reason,
+            selected_slots=selected_slots, **base,
+        )
 
     discharge_reserve_soc = max(data.min_soc_pct, adaptive_target)
     discharge_energy_kwh = data.battery_capacity_kwh * max(
@@ -467,6 +511,10 @@ def optimize(data: OptimizerInput) -> Decision:
                 ) if decision.action == "charge" else 0.0, 4,
             ),
             "target_soc_pct": decision.adaptive_target_soc_pct,
+            "later_reserve_kwh": decision.later_reserve_kwh,
+            "available_for_home_kwh": decision.available_for_home_kwh,
+            "home_demand_kwh": decision.home_demand_kwh,
+            "cheap_recharge_available": decision.cheap_recharge_available,
         })
     sessions = []
     session = None
