@@ -41,6 +41,21 @@ Open the private live-control dashboard:
 
 ### Thermostat temperature adjustment
 
+Each thermostat can optionally be mapped to its own instantaneous power sensor
+(W, kW or MW) in **Thermostats**. Choose the actual load sensor and its phase;
+do not select whole-house power, accumulated energy, average power or a setpoint.
+The same sensor cannot be credited to multiple zones. The app shows measured
+load and HA's additional power reserve. This mapping requires version 0.14.6.
+
+Phase current already includes loads that are running. With fresh, corresponding
+readings, a 3 kW maximum load already drawing 1 kW reserves another 2 kW, rather
+than adding the full 3 kW again. Pending reserves track changes in measured draw.
+Unknown phases, stale or invalid measurements, and a phase meter that has not
+yet reported the load retain the full maximum-power reserve. Three-phase mapping
+assumes a balanced load; a total-power sensor does not measure individual phases.
+Unmapped zones retain the previous conservative behavior. Existing control
+choices remain unchanged when adding a sensor to the same thermostat.
+
 In **Thermostats**, choose a temperature adjustment policy independently for
 each zone, save the configuration to Home Assistant, then enable automatic
 climate control. The dashboard checks that HA has saved zones before enabling;

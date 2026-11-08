@@ -128,11 +128,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         )
         self.controller.power_guard = self._guard_power_write
 
-    def _guard_thermal_increase(self, demand) -> bool:
+    def _guard_thermal_increase(self, demand, exclude_entity_id=None) -> bool:
         """Read the latest phases before increasing a thermostat's demand."""
         now = dt_util.now()
         currents, _, stale = self._phase_currents(now)
-        reserved = self.thermal.phase_reservations(now)
+        reserved = self.thermal.phase_reservations(now, exclude_entity_id=exclude_entity_id)
         pending_battery_a = 0.0
         execution = getattr(self.controller, "execution", {})
         if self.controller.enabled and execution.get("action") == "charge":

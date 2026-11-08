@@ -78,6 +78,7 @@ from .const import (
 )
 from .fronius import missing_control_modes
 from .learning import ConsumptionModel
+from .measurements import is_load_power_measurement
 from .power import house_input_is_grid
 from .temperature import temperature_limits
 
@@ -383,10 +384,10 @@ def validate_climate_rules(hass, rules) -> list[dict]:
     units = getattr(getattr(hass, "config", None), "units", None)
     if rules and getattr(units, "temperature_unit", "°C") != "°C":
         raise HomeAssistantError("Thermostat control currently requires Home Assistant units °C")
-    normalized, seen = [], set()
+    normalized, seen, power_sensors = [], set(), set()
     allowed = {"entity_id", "baseline", "max_deviation", "weight", "mode", "direction",
                "heater_type", "scop", "max_power_w", "phase"}
-    optional = {"adjustment"}
+    optional = {"adjustment", "power_entity"}
     for raw in rules:
         if not isinstance(raw, dict) or not allowed <= set(raw) or set(raw) - allowed - optional:
             raise HomeAssistantError("Each climate rule needs a complete zone configuration")
@@ -402,6 +403,15 @@ def validate_climate_rules(hass, rules) -> list[dict]:
         if entity_id in seen:
             raise HomeAssistantError("climate_rules contains duplicate zones")
         seen.add(entity_id)
+        if "power_entity" in rule:
+            power_entity = _entity_id(rule["power_entity"], "sensor", "climate power_entity")
+            _entity_exists(hass, power_entity, "climate power_entity")
+            if not is_load_power_measurement(power_entity, hass.states.get(power_entity)):
+                raise HomeAssistantError("Climate power_entity must be an instantaneous "
+                                         "power measurement in W, kW, or MW")
+            if power_entity in power_sensors:
+                raise HomeAssistantError("Each climate power_entity must belong to one zone only")
+            power_sensors.add(power_entity)
         try:
             minimum, maximum = temperature_limits(hass.states.get(entity_id))
         except ValueError as err:

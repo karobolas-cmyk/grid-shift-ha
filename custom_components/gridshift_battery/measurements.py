@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from math import isfinite
 
@@ -9,6 +10,18 @@ from math import isfinite
 def report_time(state):
     """A repeated report is fresh even when the value has not changed."""
     return getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+
+
+def is_load_power_measurement(entity_id: str, state) -> bool:
+    """Only instantaneous power sensors can describe a thermostat's actual load."""
+    if state is None or not entity_id.startswith("sensor."):
+        return False
+    text = f"{entity_id} {state.attributes.get('friendly_name', '')}".lower()
+    return state.attributes.get("unit_of_measurement") in {"W", "kW", "MW"} and not re.search(
+        r"average|genomsnitt|min(?:imum)?[_. ]|max(?:imum)?[_. ]|limit|accumulated|"
+        r"recommended|recommendation|setpoint|börvärde|gridshift|forecast|grid_(?:charge|discharge)_power",
+        text,
+    )
 
 
 def power_snapshot(hass, config: dict, now: datetime) -> dict:
