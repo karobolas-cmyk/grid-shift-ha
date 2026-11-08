@@ -385,10 +385,17 @@ def validate_climate_rules(hass, rules) -> list[dict]:
     normalized, seen = [], set()
     allowed = {"entity_id", "baseline", "max_deviation", "weight", "mode", "direction",
                "heater_type", "scop", "max_power_w", "phase"}
+    optional = {"adjustment"}
     for raw in rules:
-        if not isinstance(raw, dict) or set(raw) != allowed:
+        if not isinstance(raw, dict) or not allowed <= set(raw) or set(raw) - allowed - optional:
             raise HomeAssistantError("Each climate rule needs a complete zone configuration")
         rule = dict(raw)
+        if not isinstance(rule.get("adjustment", "both"), str) or rule.get(
+            "adjustment", "both",
+        ) not in {"both", "setback_only", "lower_only"}:
+            raise HomeAssistantError("Invalid climate temperature adjustment")
+        if rule.get("adjustment") == "lower_only" and rule["direction"] in {"cool", "heat_cool"}:
+            raise HomeAssistantError("Lower-only temperature control requires heating")
         entity_id = _entity_id(rule["entity_id"], "climate", "climate_rules")
         _entity_exists(hass, entity_id, "climate_rules")
         if entity_id in seen:

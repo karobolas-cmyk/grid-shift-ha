@@ -181,6 +181,13 @@ def test_thermostat_configuration_rejects_unbounded_or_unknown_targets() -> None
             "mode": "scale", "direction": "auto", "heater_type": "air_air", "scop": 3.5,
             "max_power_w": 1500, "phase": "unknown"}
     assert validate_climate_rules(hass, [rule]) == [rule]
+    for policy in ("both", "setback_only", "lower_only"):
+        configured = {**rule, "adjustment": policy}
+        assert validate_climate_rules(hass, [configured]) == [configured]
+    with pytest.raises(HomeAssistantError, match="temperature adjustment"):
+        validate_climate_rules(hass, [{**rule, "adjustment": "arbitrary"}])
+    with pytest.raises(HomeAssistantError, match="requires heating"):
+        validate_climate_rules(hass, [{**rule, "adjustment": "lower_only", "direction": "cool"}])
     with pytest.raises(HomeAssistantError, match="Invalid climate max_deviation"):
         validate_climate_rules(hass, [{**rule, "max_deviation": 10}])
     with pytest.raises(HomeAssistantError, match="complete zone configuration"):

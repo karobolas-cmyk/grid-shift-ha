@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from math import isfinite
+from math import ceil, floor, isfinite
 
 from .measurements import report_time
 from .price import current_slot
@@ -71,6 +71,41 @@ def weather_temperature(rows, instant: datetime, fallback: float) -> float:
     return fallback
 
 
+def limit_temperature_adjustment(rule: dict, state, target: dict) -> dict:
+    """Apply the selected policy to plans, restoration and the final physical write."""
+    policy = rule.get("adjustment", "both")
+    if policy == "both":
+        return target
+    direction = effective_direction(rule, state)
+    if policy == "lower_only" and direction != "heat":
+        raise ValueError("lower_only_requires_heating")
+    if direction not in {"heat", "cool"}:
+        return target
+    value = number(target.get("temperature"))
+    if value is None:
+        raise ValueError("target_unavailable")
+    baseline = float(rule["baseline"])
+    step = number(state.attributes.get("target_temp_step")) or 0.5
+    if direction == "cool":
+        # A cooling setback saves energy by raising the target; never pre-cool.
+        bound = ceil(baseline / step - 1e-9) * step
+        return {"temperature": round(max(value, bound), 2)}
+    upper = baseline
+    if policy == "lower_only":
+        observed = number(target_state(state).get("temperature"))
+        if observed is None:
+            raise ValueError("target_unavailable")
+        if observed < baseline - float(rule["max_deviation"]):
+            return {"temperature": observed}  # Preserve a lower manual setting.
+        upper = min(upper, observed)
+    upper = floor(upper / step + 1e-9) * step
+    if upper < max(
+        baseline - float(rule["max_deviation"]), number(state.attributes.get("min_temp")) or 7,
+    ):
+        raise ValueError("temperature_band_has_no_supported_step")
+    return {"temperature": round(min(value, upper), 2)}
+
+
 def thermal_target(
     rule: dict, state, slots, now: datetime, outdoor: float | None, weather=()
 ) -> dict:
@@ -113,15 +148,17 @@ def thermal_target(
                 offset = max(0.0, offset)
     if direction == "heat_cool":
         # Preserve a neutral band instead of shifting both heating and cooling together.
-        return {
+        return limit_temperature_adjustment(rule, state, {
             "target_temp_low": round(max(low, baseline - deviation), 2),
             "target_temp_high": round(min(high, baseline + deviation), 2),
-        }
+        })
     step = number(state.attributes.get("target_temp_step")) or 0.5
     value = min(high, max(low, baseline + offset))
     value = round(value / step) * step
     # Quantization may never move the target outside the user's or device's bounds.
-    return {"temperature": round(min(high, max(low, value)), 2)}
+    return limit_temperature_adjustment(
+        rule, state, {"temperature": round(min(high, max(low, value)), 2)},
+    )
 
 
 class ThermalController:
@@ -202,8 +239,33 @@ class ThermalController:
         return tuple(amps if phase == name else 0.0 for name in ("L1", "L2", "L3"))
 
     async def _write(self, entity_id: str, target: dict, now: datetime, zone: dict) -> None:
+        rule = next(
+            (rule for rule in self.config.get("climate_rules", [])
+             if rule["entity_id"] == entity_id), zone.get("policy_rule", {}),
+        )
+        zone["policy_rule"] = dict(rule)
         zone.update(status="pending", requested=target, attempted_at=now.isoformat())
         await self.storage.async_save()
+        # Re-read after persistence: a manual change during the await must not
+        # turn a lower-only command or restoration into a temperature increase.
+        try:
+            observed = target_state(self.hass.states.get(entity_id))
+            requested = dict(target)
+            target = limit_temperature_adjustment(rule, self.hass.states.get(entity_id), target)
+        except ValueError as err:
+            zone.update(status=str(err))
+            await self.storage.async_save()
+            return
+        if targets_match(target, observed):
+            zone.update(
+                status="manual_restore_required"
+                if rule.get("adjustment") == "lower_only"
+                and not targets_match(requested, observed) else "confirmed",
+                requested=target, observed=observed,
+            )
+            await self.storage.async_save()
+            return
+        zone["requested"] = target
         try:
             async with asyncio.timeout(15):
                 await self.hass.services.async_call(
@@ -242,6 +304,11 @@ class ThermalController:
                     await self._write(entity_id, zone["original"], now, zone)
                     if zone["status"] == "confirmed":
                         zone.clear()
+                    elif zone["status"] in {
+                        "manual_restore_required", "lower_only_requires_heating",
+                    }:
+                        zone.clear()
+                        zone["status"] = "manual_restore_required"
                 elif zone.get("original"):
                     zone.clear()
             await self.storage.async_save()
@@ -270,6 +337,7 @@ class ThermalController:
                     "entity_id": entity_id,
                     "baseline": rule["baseline"],
                     "max_deviation": rule["max_deviation"],
+                    "adjustment": rule.get("adjustment", "both"),
                     "status": "off",
                     "target": {},
                 }
@@ -277,6 +345,8 @@ class ThermalController:
                 if not self.enabled:
                     if zone.get("original"):
                         row.update(status="restore_unconfirmed", error=zone.get("error"))
+                    elif zone.get("status") == "manual_restore_required":
+                        row["status"] = "manual_restore_required"
                     continue
                 if effective_direction(rule, state) is None:
                     row["status"] = "inactive_or_incompatible_hvac_mode"

@@ -187,10 +187,10 @@ class GridShiftSensor(CoordinatorEntity, SensorEntity):
             return None
         data = self.coordinator.data
         return {
-            "bridge_version": "0.14.1",
+            "bridge_version": "0.14.3",
             "capabilities": [
                 "house_consumption_entity", "market_prices", "power_snapshot", "notifications",
-                "persistent_control",
+                "persistent_control", "climate_adjustment_policy",
             ],
             "selected_slots": list(data.selected_slots),
             "current_price": data.current_price,
