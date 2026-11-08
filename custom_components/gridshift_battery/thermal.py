@@ -11,6 +11,7 @@ from homeassistant.exceptions import ServiceValidationError
 from .measurements import report_time
 from .price import current_slot
 from .safety import sensor_age_seconds
+from .temperature import temperature_limits
 
 
 def number(value):
@@ -101,8 +102,9 @@ def limit_temperature_adjustment(rule: dict, state, target: dict) -> dict:
             return {"temperature": observed}  # Preserve a lower manual setting.
         upper = min(upper, observed)
     upper = floor(upper / step + 1e-9) * step
+    minimum, _ = temperature_limits(state, defaults=(7.0, 35.0))
     if upper < max(
-        baseline - float(rule["max_deviation"]), number(state.attributes.get("min_temp")) or 7,
+        baseline - float(rule["max_deviation"]), minimum,
     ):
         raise ValueError("temperature_band_has_no_supported_step")
     return {"temperature": round(min(value, upper), 2)}
@@ -117,8 +119,9 @@ def thermal_target(
     direction = effective_direction(rule, state)
     if direction is None:
         raise ValueError("inactive_or_incompatible_hvac_mode")
-    low = max(baseline - deviation, number(state.attributes.get("min_temp")) or 7)
-    high = min(baseline + deviation, number(state.attributes.get("max_temp")) or 35)
+    minimum, maximum = temperature_limits(state, defaults=(7.0, 35.0))
+    low = max(baseline - deviation, minimum)
+    high = min(baseline + deviation, maximum)
     if not low <= baseline <= high:
         raise ValueError("baseline_outside_device_limits")
     active = current_slot(slots, now)
@@ -257,9 +260,13 @@ class ThermalController:
         # Re-read after persistence: a manual change during the await must not
         # turn a lower-only command or restoration into a temperature increase.
         try:
-            observed = target_state(self.hass.states.get(entity_id))
+            state = self.hass.states.get(entity_id)
+            observed = target_state(state)
             requested = dict(target)
-            target = limit_temperature_adjustment(rule, self.hass.states.get(entity_id), target)
+            target = limit_temperature_adjustment(rule, state, target)
+            minimum, maximum = temperature_limits(state, defaults=(7.0, 35.0))
+            if any(not minimum <= value <= maximum for value in target.values()):
+                raise ValueError("target_outside_device_limits")
         except ValueError as err:
             zone.update(status=str(err))
             await self.storage.async_save()

@@ -79,6 +79,7 @@ from .const import (
 from .fronius import missing_control_modes
 from .learning import ConsumptionModel
 from .power import house_input_is_grid
+from .temperature import temperature_limits
 
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
 ATTR_CONFIGURATION = "configuration"
@@ -401,15 +402,20 @@ def validate_climate_rules(hass, rules) -> list[dict]:
         if entity_id in seen:
             raise HomeAssistantError("climate_rules contains duplicate zones")
         seen.add(entity_id)
+        try:
+            minimum, maximum = temperature_limits(hass.states.get(entity_id))
+        except ValueError as err:
+            raise HomeAssistantError(f"Invalid climate temperature limits for {entity_id}") from err
         for key, lower, upper in (
-            ("baseline", 14, 30), ("max_deviation", 0.2, 4), ("weight", 1, 10),
+            ("baseline", minimum, maximum), ("max_deviation", 0.2, 4), ("weight", 1, 10),
             ("scop", 1, 7), ("max_power_w", 50, 50000),
         ):
             value = rule[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
                 math.isfinite(value) and lower <= value <= upper
             ):
-                raise HomeAssistantError(f"Invalid climate {key} for {entity_id}")
+                limits = f"; allowed range {lower:g}–{upper:g} °C" if key == "baseline" else ""
+                raise HomeAssistantError(f"Invalid climate {key} for {entity_id}{limits}")
         options = {
             "mode": {"scale", "peak"}, "direction": {"auto", "heat", "cool", "heat_cool"},
             "phase": {"unknown", "L1", "L2", "L3", "3_phase"},

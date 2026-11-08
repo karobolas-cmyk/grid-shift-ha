@@ -113,6 +113,47 @@ def test_empty_climate_configuration_can_always_be_disabled():
     assert calls == []
 
 
+@pytest.mark.parametrize("policy,expensive,expected", [
+    ("both", False, 38), ("both", True, 35),
+    ("setback_only", False, 37), ("setback_only", True, 35),
+    ("lower_only", False, 37), ("lower_only", True, 35),
+])
+def test_spa_at_37_degrees_keeps_device_limits_and_temperature_policy(policy, expensive, expected):
+    rule = {**RULE, "baseline": 37, "max_deviation": 2, "adjustment": policy}
+    controller, states, calls = setup(enabled=True, rules=[rule])
+    states[RULE["entity_id"]].attributes.update(
+        temperature=37, current_temperature=37, min_temp=10, max_temp=38,
+    )
+    slots = tuple(
+        PriceSlot(slot.start, slot.end, 6 - slot.price if expensive else slot.price)
+        for slot in SLOTS
+    )
+    evaluate(controller, slots=slots)
+    assert controller.snapshot["zones"][0]["target"] == {"temperature": expected}
+    if expected == 37:
+        assert calls == []
+    else:
+        assert calls == [("climate", "set_temperature", {
+            "entity_id": RULE["entity_id"], "temperature": expected,
+        })]
+
+
+def test_physical_write_rechecks_device_limits_after_persistence():
+    rule = {**RULE, "baseline": 37}
+    controller, states, calls = setup(enabled=True, rules=[rule])
+    state = states[RULE["entity_id"]]
+    state.attributes.update(temperature=37, current_temperature=37, min_temp=10, max_temp=40)
+
+    async def save():
+        state.attributes["max_temp"] = 37
+
+    controller.storage.async_save = save
+    zone = {}
+    asyncio.run(controller._write(RULE["entity_id"], {"temperature": 38}, NOW, zone))
+    assert calls == []
+    assert zone["status"] == "target_outside_device_limits"
+
+
 def test_only_selected_zone_is_written_within_its_temperature_band():
     controller, _, calls = setup(enabled=True)
     evaluate(controller)
