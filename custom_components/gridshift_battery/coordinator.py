@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from dataclasses import replace
@@ -117,6 +118,8 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             hass, storage, entry.entry_id, getattr(entry, "title", "Home"),
         )
         self.notification_task = None
+        self.stopping = False
+        self.update_tasks = set()
         super().__init__(
             hass,
             _LOGGER,
@@ -348,16 +351,23 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
 
     async def _async_update_data(self) -> Decision:
         """Keep notification delivery out of the physical control path."""
+        if self.stopping:
+            return self.data
+        task = asyncio.current_task()
+        self.update_tasks.add(task)
         try:
-            decision = await self._async_decide()
-        except UpdateFailed:
-            self._queue_notifications(None, input_failed=True)
-            raise
-        self._queue_notifications(decision)
-        return decision
+            try:
+                decision = await self._async_decide()
+            except UpdateFailed:
+                self._queue_notifications(None, input_failed=True)
+                raise
+            self._queue_notifications(decision)
+            return decision
+        finally:
+            self.update_tasks.discard(task)
 
     def _queue_notifications(self, decision: Decision | None, *, input_failed=False) -> None:
-        if not self.notifications.settings["enabled"] or (
+        if self.stopping or not self.notifications.settings["enabled"] or (
             self.notification_task and not self.notification_task.done()
         ):
             return
@@ -395,6 +405,8 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             slots = await self.price_task
         else:
             slots = await self.prices.async_prices(now)
+        if self.stopping:
+            return self.data
         now = dt_util.now()
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)

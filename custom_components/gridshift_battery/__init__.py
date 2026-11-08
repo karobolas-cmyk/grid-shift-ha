@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,12 +18,14 @@ from homeassistant.util import dt as dt_util
 from .bridge import (
     ATTR_CONFIGURATION,
     SERVICE_APPLY_CONFIGURATION,
+    prepare_configuration_reload,
     validate_configuration,
 )
 from .const import (
     CONF_BATTERY_CHARGE_SENSOR,
     CONF_BATTERY_DISCHARGE_SENSOR,
     CONF_BATTERY_POWER_ENTITY,
+    CONF_CONTROL_MODE_ENTITY,
     CONF_EV_POWER_ENTITIES,
     CONF_EV_POWER_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
@@ -36,6 +39,7 @@ from .const import (
     CONF_SOLAR_POWER_ENTITIES,
     CONF_SOLAR_POWER_ENTITY,
     CONF_WEATHER_ENTITY,
+    DEFAULTS,
     DOMAIN,
     SERVICE_CLEAR_FORCE_ACTION,
     SERVICE_FORCE_ACTION,
@@ -46,7 +50,6 @@ from .const import (
 )
 from .controller import BatteryController, RuntimeStorage
 from .coordinator import GridShiftCoordinator, merged_config
-from .learning import ConsumptionModel
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
@@ -73,19 +76,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         entry = entries[0]
         validated = validate_configuration(hass, call.data[ATTR_CONFIGURATION])
         runtime: GridShiftRuntime | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if runtime and runtime.controller and runtime.controller.enabled:
-            await runtime.controller.async_set_enabled(False)
-        if runtime and runtime.coordinator and runtime.coordinator.thermal.enabled:
-            await runtime.coordinator.thermal.async_set_enabled(False, dt_util.now())
-        source_fields = {
-            "house_consumption_entity",
-            "house_load_entity", "house_load_source", "house_load_direction",
-            "house_load_is_grid_power", "battery_power_entity", "battery_power_direction",
-            "battery_charge_power_sensor", "battery_discharge_power_sensor",
-        }
-        if runtime and any(entry.data.get(key) != validated.get(key) for key in source_fields):
-            runtime.storage.model = ConsumptionModel()
-            await runtime.storage.async_save()
+        previous, updated = merged_config(entry), {**DEFAULTS, **validated}
+        if previous == updated:
+            return
+        await prepare_configuration_reload(runtime, previous, updated, dt_util.now())
         hass.config_entries.async_update_entry(entry, data=validated, options={})
 
     async def async_force_action(call: ServiceCall) -> None:
@@ -219,6 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     watched_entities = {
+        controller.config[CONF_CONTROL_MODE_ENTITY],
         controller.config[CONF_SOC_ENTITY],
         controller.config[CONF_HOUSE_LOAD_ENTITY],
         *controller.config[CONF_PHASE_CURRENT_ENTITIES],
@@ -274,25 +269,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload and safely relinquish battery control."""
+    """Relinquish physical control while preserving the saved state for the next worker."""
     runtime: GridShiftRuntime = hass.data[DOMAIN][entry.entry_id]
-    if runtime.coordinator is not None:
-        if runtime.coordinator.notification_task:
-            await runtime.coordinator.notification_task
-        if runtime.coordinator.price_task and not runtime.coordinator.price_task.done():
-            runtime.coordinator.price_task.cancel()
-        if runtime.coordinator.thermal_task:
-            await runtime.coordinator.thermal_task
-        await runtime.coordinator.thermal.async_release(dt_util.now())
-    if runtime.controller is not None and runtime.controller.enabled:
-        await runtime.controller.async_release_control()
+    coordinator = runtime.coordinator
+    if coordinator is not None:
+        coordinator.stopping = True
+    unload_ok = False
+    try:
+        if runtime.controller is not None:
+            await runtime.controller.async_prepare_reload()
+        if coordinator is not None:
+            active = [
+                task for task in coordinator.update_tasks if task is not asyncio.current_task()
+            ]
+            if active:
+                await asyncio.gather(*active)
+            if coordinator.notification_task:
+                await coordinator.notification_task
+            if coordinator.price_task and not coordinator.price_task.done():
+                coordinator.price_task.cancel()
+            if coordinator.thermal_task:
+                await coordinator.thermal_task
+            await coordinator.thermal.async_release(dt_util.now())
         await runtime.storage.async_save()
-    unload_ok = True
-    if runtime.platforms_loaded:
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok
+        unload_ok = True
+        if runtime.platforms_loaded:
+            unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        if unload_ok:
+            hass.data[DOMAIN].pop(entry.entry_id)
+        return unload_ok
+    finally:
+        if not unload_ok:
+            if runtime.controller is not None:
+                runtime.controller.resume_after_failed_reload()
+            if coordinator is not None:
+                coordinator.stopping = False
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

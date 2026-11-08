@@ -2,6 +2,23 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.14.1 - 2026-11-08
+
+- Preserve saved battery, grid-export and climate opt-ins across upgrades,
+  integration reloads, HA restarts, and settings changes for the same actuators.
+  Reapplying an unchanged configuration is a no-op.
+- Treat a missing/unknown/unavailable inverter mode during startup as a wait,
+  rather than a manual mode override that permanently disables control.
+  Reevaluate immediately when the mode entity becomes available.
+- Quiesce in-flight commands before reload without persisting an Off state or
+  latching an update-related write failure. Drain old updates before loading a
+  new worker; resume the existing worker if platform unload fails.
+- Preserve intentional Off and latched fault states. A genuine manual mode
+  override still disarms control. Newly mapped actuators and thermostat scopes
+  require explicit arming; existing settings and source changes keep their opt-ins.
+- Add upgrade/reload regression tests against the real configuration service and
+  unload handlers, including startup mode restoration and an in-flight command.
+
 ## 0.14.0 - 2026-11-07
 
 - Add opt-in anomaly push notifications through selected HA Companion App

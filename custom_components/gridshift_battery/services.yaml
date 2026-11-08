@@ -2,7 +2,8 @@ apply_configuration:
   name: Apply GridShift configuration
   description: >-
     Validates and stores an entity mapping submitted by the GridShift application.
-    Battery control remains disabled until its dedicated switch is enabled.
+    Existing control choices are preserved for unchanged actuator targets.
+    New actuator targets remain disabled until explicitly enabled.
   fields:
     configuration:
       name: Configuration

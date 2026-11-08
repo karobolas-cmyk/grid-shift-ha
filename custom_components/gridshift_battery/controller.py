@@ -122,11 +122,27 @@ class BatteryController:
             storage.state.control_fault.get("execution") or {}
         )
         self._apply_lock = asyncio.Lock()
+        self._suspended = False
         self.power_guard: Callable[[int, str], int] | None = None
 
     @property
     def enabled(self) -> bool:
         return self.storage.state.enabled
+
+    @property
+    def _can_write(self) -> bool:
+        return self.enabled and not self._suspended
+
+    async def async_prepare_reload(self) -> None:
+        """Quiesce in-flight writes without changing the user's persisted opt-in."""
+        self._suspended = True
+        async with self._apply_lock:
+            if self.storage.state.enabled or self.storage.state.owns_control:
+                await self.async_release_control()
+
+    def resume_after_failed_reload(self) -> None:
+        """Let the existing worker continue if HA could not unload its platforms."""
+        self._suspended = False
 
     @property
     def pause_reason(self) -> str | None:
@@ -313,7 +329,7 @@ class BatteryController:
                 if (
                     attempt >= POWER_WRITE_MAX_ATTEMPTS
                     or not transient
-                    or not self.enabled
+                    or not self._can_write
                     or self._mode() != self.execution["requested_mode"]
                 ):
                     raise
@@ -324,7 +340,7 @@ class BatteryController:
                 )
                 self.execution["stage"] = "retry_power_write"
                 await asyncio.sleep(POWER_WRITE_RETRY_SECONDS)
-                if not self.enabled or self._mode() != self.execution["requested_mode"]:
+                if not self._can_write or self._mode() != self.execution["requested_mode"]:
                     raise RuntimeError(
                         "Control was disabled or Fronius mode changed during retry"
                     ) from err
@@ -336,7 +352,7 @@ class BatteryController:
             stage="check_live_safety", service_call_succeeded=False,
             power_write_confirmed=False,
         )
-        if not self.enabled or self._mode() != self.execution["requested_mode"]:
+        if not self._can_write or self._mode() != self.execution["requested_mode"]:
             raise RuntimeError("Control was disabled or Fronius mode changed before rate write")
         guarded = (
             self.power_guard(power_w, self.execution["action"])
@@ -388,7 +404,7 @@ class BatteryController:
                 readback_at=reported_at.isoformat() if reported_at else None,
                 readback_fresh=fresh,
             )
-            if not self.enabled or self._mode() != self.execution["requested_mode"]:
+            if not self._can_write or self._mode() != self.execution["requested_mode"]:
                 raise PowerReadbackError("Control was disabled or Fronius mode changed")
             if (
                 fresh
@@ -431,7 +447,7 @@ class BatteryController:
                 if remaining:
                     self.execution["stage"] = "settle_mode"
                     await asyncio.sleep(remaining)
-        if not self.enabled:
+        if not self._can_write:
             raise RuntimeError("Control was disabled or Fronius mode changed before power write")
         if self._mode() != mode:
             raise RuntimeError(f"Fronius storage mode did not settle to {mode}")
@@ -443,7 +459,7 @@ class BatteryController:
         timeout_seconds = max(poll_seconds, POWER_ENTITY_TIMEOUT_SECONDS)
         attempts = max(1, int(timeout_seconds / poll_seconds))
         for attempt in range(attempts + 1):
-            if not self.enabled or self._mode() != mode:
+            if not self._can_write or self._mode() != mode:
                 raise RuntimeError("Control was disabled or Fronius mode changed while waiting")
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in ("unknown", "unavailable"):
@@ -461,7 +477,7 @@ class BatteryController:
         await self._settle_mode(mode)
         self.execution["stage"] = "wait_power_entity"
         await self._wait_for_power_entity(power_entity, mode)
-        if not self.enabled or self._mode() != mode:
+        if not self._can_write or self._mode() != mode:
             raise RuntimeError("Control was disabled or Fronius mode changed before power write")
 
     async def async_apply(self, decision: Decision) -> str | None:
@@ -471,8 +487,8 @@ class BatteryController:
 
     async def _async_apply_serialized(self, decision: Decision) -> str | None:
         """Keep mode, power write and acknowledgement in one serialized attempt."""
-        if not self.enabled:
-            return self.pause_reason
+        if not self._can_write:
+            return self.pause_reason or ("control_reloading" if self._suspended else None)
 
         requested_modes = {
             "charge": self.config[CONF_CHARGE_MODE_OPTION],
@@ -507,7 +523,7 @@ class BatteryController:
                 failed_stage=self.execution["stage"],
                 error=f"{type(err).__name__}: {err}",
             )
-            was_enabled = self.enabled
+            was_enabled = self._can_write
             should_pause = was_enabled and not isinstance(err, LiveSafetyError)
             entity_id = self.config.get(
                 CONF_DISCHARGE_POWER_ENTITY
@@ -596,6 +612,10 @@ class BatteryController:
         discharging = self.config[CONF_DISCHARGE_MODE_OPTION]
         discharge_entity = self.config.get(CONF_DISCHARGE_POWER_ENTITY)
         mode = self._mode()
+        if mode in (None, "", "unknown", "unavailable"):
+            # Integrations restore entities asynchronously after an HA restart.
+            # Missing mode data is not a user selecting a different valid mode.
+            return "control_mode_unavailable"
         allowed_modes = {auto, charging, holding}
         if self.discharge_enabled and discharge_entity:
             allowed_modes.add(discharging)
