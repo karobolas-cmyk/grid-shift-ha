@@ -196,6 +196,58 @@ def test_thermostat_configuration_rejects_unbounded_or_unknown_targets() -> None
         validate_climate_rules(hass, [{**rule, "entity_id": "light.room"}])
 
 
+@pytest.mark.parametrize("baseline", [10, 37, 40])
+def test_spa_baseline_uses_the_selected_devices_temperature_limits(baseline):
+    states = States()
+    states.values["climate.spa"] = SimpleNamespace(
+        state="heat", attributes={"min_temp": 10, "max_temp": 40},
+    )
+    rule = {"entity_id": "climate.spa", "baseline": baseline, "max_deviation": 1,
+            "weight": 6, "mode": "scale", "direction": "auto", "heater_type": "direct_electric",
+            "scop": 1, "max_power_w": 3000, "phase": "L1"}
+    hass = SimpleNamespace(states=states)
+    assert validate_climate_rules(hass, [rule]) == [rule]
+    for invalid in (9, 41):
+        with pytest.raises(HomeAssistantError, match=r"baseline.*climate.spa.*10.*40"):
+            validate_climate_rules(hass, [{**rule, "baseline": invalid}])
+
+
+@pytest.mark.parametrize("attributes,baseline,valid", [
+    ({"min_temp": 7, "max_temp": 30}, 37, False),
+    ({}, 37, False),
+    ({}, 21, True),
+    ({"min_temp": 0, "max_temp": 40}, 0, True),
+])
+def test_climate_baselines_keep_individual_limits_and_missing_attribute_defaults(
+    attributes, baseline, valid,
+):
+    states = States()
+    states.values["climate.zone"] = SimpleNamespace(state="heat", attributes=attributes)
+    rule = {"entity_id": "climate.zone", "baseline": baseline, "max_deviation": 1,
+            "weight": 6, "mode": "scale", "direction": "auto", "heater_type": "air_air",
+            "scop": 3, "max_power_w": 1000, "phase": "unknown"}
+    if valid:
+        assert validate_climate_rules(SimpleNamespace(states=states), [rule]) == [rule]
+    else:
+        with pytest.raises(HomeAssistantError, match="Invalid climate baseline"):
+            validate_climate_rules(SimpleNamespace(states=states), [rule])
+
+
+@pytest.mark.parametrize("attributes", [
+    {"min_temp": 40, "max_temp": 10}, {"min_temp": True, "max_temp": 40},
+    {"min_temp": 10, "max_temp": float("inf")},
+    {"min_temp": 10, "max_temp": float("nan")},
+])
+def test_climate_configuration_rejects_invalid_device_temperature_limits(attributes):
+    states = States()
+    states.values["climate.spa"] = SimpleNamespace(state="heat", attributes=attributes)
+    rule = {"entity_id": "climate.spa", "baseline": 37, "max_deviation": 1,
+            "weight": 6, "mode": "scale", "direction": "auto", "heater_type": "direct_electric",
+            "scop": 1, "max_power_w": 3000, "phase": "L1"}
+    with pytest.raises(HomeAssistantError, match="Invalid climate temperature limits"):
+        validate_climate_rules(SimpleNamespace(states=states), [rule])
+
+
 def test_total_consumption_is_separate_from_grid_and_does_not_require_battery_measurements():
     states = States()
     states.values["sensor.solarnet_power_load_consumed"] = SimpleNamespace(

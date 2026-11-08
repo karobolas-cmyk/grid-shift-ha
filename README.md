@@ -45,6 +45,10 @@ In **Thermostats**, choose a temperature adjustment policy independently for
 each zone, save the configuration to Home Assistant, then enable automatic
 climate control. The dashboard checks that HA has saved zones before enabling;
 HA also rejects an empty configuration with a clear validation error.
+Each zone's baseline follows that climate entity's `min_temp` and `max_temp`,
+so a spa can use 37 °C when its device supports it. Missing limits retain the
+14–30 °C configuration defaults. Invalid or reversed device limits are rejected;
+planned targets and physical writes remain within the device's supported range.
 **Raise and lower** retains the existing behavior. **Reduce and
 restore** prevents heating above the zone baseline and allows returning to it;
 in cooling mode it prevents pre-cooling below the baseline.
