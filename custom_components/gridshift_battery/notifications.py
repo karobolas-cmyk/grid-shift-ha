@@ -101,7 +101,10 @@ def anomalies(
              "Ett termostatkommando kunde inte bekräftas. Kontrollera klimatstatus i GridShift."))
     if not enabled and not thermal.get("enabled"):
         return result
-    if input_failed or reason.startswith("phase_sensor_stale"):
+    if (
+        input_failed or reason.startswith("phase_sensor_stale")
+        or reason == "control_mode_unavailable"
+    ):
         result["inputs"] = Anomaly("missing_data",
             ("Measurements are missing", "Mätvärden saknas"),
             ("GridShift cannot evaluate safely because required measurements are unavailable "

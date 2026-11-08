@@ -533,6 +533,63 @@ def test_disarming_grid_discharge_only_returns_to_auto() -> None:
             {"entity_id": "select.storage_mode", "option": "Auto"},
         )
     ]
+
+
+@pytest.mark.parametrize("mode", [None, "", "unknown", "unavailable"])
+def test_startup_missing_mode_keeps_the_saved_opt_in(mode) -> None:
+    actuator, events = controller()
+    if mode is None:
+        actuator.hass.states.values.pop("select.storage_mode")
+    else:
+        actuator.hass.states.values["select.storage_mode"].state = mode
+    reason = asyncio.run(actuator.async_apply(Decision("charge", 5000, "cheap_interval")))
+    assert reason == "control_mode_unavailable"
+    assert actuator.storage.state.enabled is True
+    assert actuator.storage.state.control_fault == {}
+    assert events == []
+    actuator.hass.states.values["select.storage_mode"] = FakeState("Auto")
+    assert asyncio.run(actuator.async_apply(Decision("idle", 0, "planned_auto"))) is None
+    assert actuator.enabled is True
+
+
+def test_update_during_mode_settling_does_not_latch_a_write_fault(monkeypatch) -> None:
+    async def run():
+        actuator, events = controller()
+        settling, proceed = asyncio.Event(), asyncio.Event()
+        original_sleep = asyncio.sleep
+
+        async def settle(_):
+            settling.set()
+            await proceed.wait()
+
+        monkeypatch.setattr(controller_module.asyncio, "sleep", settle)
+        command = asyncio.create_task(actuator.async_apply(Decision("charge", 5000, "test")))
+        await settling.wait()
+        shutdown = asyncio.create_task(actuator.async_prepare_reload())
+        await original_sleep(0)
+        assert actuator.storage.state.enabled is True
+        assert actuator.enabled is True, "The displayed On/Off choice stays on during reload"
+        proceed.set()
+        with pytest.raises(RuntimeError, match="disabled"):
+            await command
+        await shutdown
+        assert actuator.storage.state.enabled is True
+        assert actuator.storage.state.control_fault == {}
+        assert actuator.hass.states.get("select.storage_mode").state == "Auto"
+        assert not any(event[1:3] == ("number", "set_value") for event in events)
+        actuator.resume_after_failed_reload()
+        assert actuator.enabled is True
+
+    asyncio.run(run())
+
+
+def test_reload_does_not_touch_a_manually_controlled_battery_when_disabled() -> None:
+    actuator, events = controller()
+    actuator.storage.state.enabled = False
+    actuator.hass.states.values["select.storage_mode"].state = "Charge from Grid"
+    asyncio.run(actuator.async_prepare_reload())
+    assert actuator.storage.state.enabled is False
+    assert events == []
     assert actuator.discharge_enabled is False
 
 def test_force_action_is_stored_and_can_be_cleared() -> None:

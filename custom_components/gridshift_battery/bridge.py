@@ -77,6 +77,7 @@ from .const import (
     CONF_WINTER_SOLAR_FACTOR,
 )
 from .fronius import missing_control_modes
+from .learning import ConsumptionModel
 from .power import house_input_is_grid
 
 SERVICE_APPLY_CONFIGURATION = "apply_configuration"
@@ -411,4 +412,44 @@ def validate_climate_rules(hass, rules) -> list[dict]:
             raise HomeAssistantError(f"Invalid climate strategy or equipment for {entity_id}")
         normalized.append(rule)
     return normalized
+
+
+async def prepare_configuration_reload(runtime, previous: dict, updated: dict, now) -> None:
+    """Keep existing opt-ins when saving settings for the same physical targets."""
+    if runtime is None:
+        return
+    actuator_fields = (
+        CONF_CONTROL_MODE_ENTITY, CONF_CHARGE_POWER_ENTITY, CONF_AUTO_MODE_OPTION,
+        CONF_CHARGE_MODE_OPTION, CONF_BLOCK_DISCHARGE_MODE_OPTION,
+    )
+    battery_changed = any(previous.get(key) != updated.get(key) for key in actuator_fields)
+    export_changed = battery_changed or any(previous.get(key) != updated.get(key) for key in (
+        CONF_DISCHARGE_POWER_ENTITY, CONF_DISCHARGE_MODE_OPTION,
+    ))
+    if battery_changed:
+        if runtime.controller:
+            await runtime.controller.async_set_enabled(False)
+        else:
+            runtime.storage.state.enabled = False
+    if export_changed:
+        if runtime.controller:
+            await runtime.controller.async_set_discharge_enabled(False)
+        else:
+            runtime.storage.state.discharge_enabled = False
+    def climate_targets(config):
+        return {rule["entity_id"] for rule in config.get(CONF_CLIMATE_RULES, [])}
+
+    if climate_targets(previous) != climate_targets(updated):
+        if runtime.coordinator:
+            await runtime.coordinator.thermal.async_set_enabled(False, now)
+        else:
+            runtime.storage.state.thermal_enabled = False
+    source_fields = (
+        CONF_HOUSE_CONSUMPTION_ENTITY, CONF_HOUSE_LOAD_ENTITY, CONF_HOUSE_LOAD_SOURCE,
+        CONF_HOUSE_LOAD_DIRECTION, CONF_HOUSE_LOAD_IS_GRID_POWER, CONF_BATTERY_POWER_ENTITY,
+        CONF_BATTERY_POWER_DIRECTION, CONF_BATTERY_CHARGE_SENSOR, CONF_BATTERY_DISCHARGE_SENSOR,
+    )
+    if any(previous.get(key) != updated.get(key) for key in source_fields):
+        runtime.storage.model = ConsumptionModel()
+    await runtime.storage.async_save()
 

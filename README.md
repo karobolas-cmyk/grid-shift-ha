@@ -27,7 +27,9 @@ import values** calls the integration's restricted `apply_configuration`
 service. The service accepts only GridShift's documented mapping and safety
 fields, validates them locally in Home Assistant, reloads the integration, and
 creates the dedicated control switches. It cannot proxy arbitrary Home
-Assistant service calls. Control remains off after configuration.
+Assistant service calls. Initial configuration and newly mapped actuators remain
+off until explicitly enabled. Settings changes for the same actuators preserve
+the existing battery, grid-export and climate choices.
 
 The battery control path is native to
 [`callifo/fronius_modbus`](https://github.com/callifo/fronius_modbus). GridShift
@@ -402,7 +404,15 @@ so confirm that its values match the compensation relevant to your contract.
 
 ## Safe startup
 
-Automatic control is off after installation. Before enabling it, verify:
+Automatic control is off after the first installation. Once enabled, its saved
+state survives software upgrades, integration reloads and HA restarts. The new
+worker waits for valid live inputs and a restored inverter mode, then resumes
+evaluation automatically. Reloading drains the old worker and relinquishes its
+physical commands without clearing the saved opt-in. A previously disabled or
+fault-paused controller stays disabled; upgrades never clear a latched fault.
+Changes to actuator identities or control-mode mappings require a new opt-in.
+
+Before enabling control for the first time or for new actuators, verify:
 
 - the recommended power is zero when any phase has no safe headroom;
 - L1, L2, and L3 are mapped in the correct order;
