@@ -248,6 +248,39 @@ def test_climate_configuration_rejects_invalid_device_temperature_limits(attribu
         validate_climate_rules(SimpleNamespace(states=states), [rule])
 
 
+@pytest.mark.parametrize("unit", ["W", "kW", "MW"])
+def test_climate_accepts_an_optional_real_power_sensor(unit):
+    states = States()
+    states.values["climate.zone"] = SimpleNamespace(state="heat", attributes={})
+    states.values["sensor.zone_power"] = SimpleNamespace(
+        state="0", attributes={"unit_of_measurement": unit},
+    )
+    rule = {"entity_id": "climate.zone", "baseline": 21, "max_deviation": 1,
+            "weight": 6, "mode": "scale", "direction": "auto", "heater_type": "air_air",
+            "scop": 3, "max_power_w": 3000, "phase": "L2", "power_entity": "sensor.zone_power"}
+    hass = SimpleNamespace(states=states)
+    assert validate_climate_rules(hass, [rule]) == [rule]
+    states.values["climate.second"] = states.values["climate.zone"]
+    with pytest.raises(HomeAssistantError, match="one zone only"):
+        validate_climate_rules(hass, [rule, {**rule, "entity_id": "climate.second"}])
+
+
+@pytest.mark.parametrize("entity_id,unit", [
+    ("number.zone_power", "W"), ("sensor.zone_energy", "kWh"),
+    ("sensor.zone_average_power", "W"), ("sensor.gridshift_recommended_power", "W"),
+    ("sensor.zone_max_power", "W"),
+])
+def test_climate_rejects_energy_averages_and_setpoints_as_live_load(entity_id, unit):
+    states = States()
+    states.values["climate.zone"] = SimpleNamespace(state="heat", attributes={})
+    states.values[entity_id] = SimpleNamespace(state="0", attributes={"unit_of_measurement": unit})
+    rule = {"entity_id": "climate.zone", "baseline": 21, "max_deviation": 1,
+            "weight": 6, "mode": "scale", "direction": "auto", "heater_type": "air_air",
+            "scop": 3, "max_power_w": 3000, "phase": "L2", "power_entity": entity_id}
+    with pytest.raises(HomeAssistantError, match="sensor entity|instantaneous"):
+        validate_climate_rules(SimpleNamespace(states=states), [rule])
+
+
 def test_total_consumption_is_separate_from_grid_and_does_not_require_battery_measurements():
     states = States()
     states.values["sensor.solarnet_power_load_consumed"] = SimpleNamespace(

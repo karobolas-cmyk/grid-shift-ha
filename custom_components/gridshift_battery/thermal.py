@@ -8,7 +8,7 @@ from math import ceil, floor, isfinite
 
 from homeassistant.exceptions import ServiceValidationError
 
-from .measurements import report_time
+from .measurements import is_load_power_measurement, report_time
 from .price import current_slot
 from .safety import sensor_age_seconds
 from .temperature import temperature_limits
@@ -184,14 +184,21 @@ class ThermalController:
     def enabled(self) -> bool:
         return self.storage.state.thermal_enabled
 
-    def phase_reservations(self, now: datetime) -> tuple[float, float, float]:
+    def phase_reservations(
+        self, now: datetime, exclude_entity_id=None,
+    ) -> tuple[float, float, float]:
         """Reserve incremental demand while phase meters catch up after a target increase."""
         result = [0.0, 0.0, 0.0]
-        for zone in self.storage.state.thermal_state.values():
+        rules = {rule["entity_id"]: rule for rule in self.config.get("climate_rules", [])}
+        for entity_id, zone in self.storage.state.thermal_state.items():
+            if entity_id == exclude_entity_id:
+                continue
             try:
                 expires = datetime.fromisoformat(zone.get("reserved_until", ""))
                 if expires > now:
-                    result = [a + float(b) for a, b in zip(result, zone["reserved_a"], strict=True)]
+                    rule = rules.get(entity_id, {})
+                    demand = self._phase_demand(rule, now) if rule else zone["reserved_a"]
+                    result = [a + float(b) for a, b in zip(result, demand, strict=True)]
             except (ValueError, KeyError, TypeError):
                 continue
         return tuple(result)
@@ -240,8 +247,76 @@ class ThermalController:
             return number(weather.attributes.get("temperature"))
         return None
 
-    def _phase_demand(self, rule: dict) -> tuple[float, float, float]:
-        amps = rule["max_power_w"] / self.config["nominal_voltage_v"]
+    def _load_power(self, rule: dict, now: datetime) -> dict:
+        """Credit only a fresh load already represented in its configured phase meters."""
+        entity_id = rule.get("power_entity")
+        result = {"entity_id": entity_id, "measured_power_w": None,
+                  "credited_power_w": 0.0, "status": "not_configured"}
+        if not entity_id:
+            return result
+        state = self.hass.states.get(entity_id)
+        result["status"] = "unavailable"
+        if state is None:
+            return result
+        if not is_load_power_measurement(entity_id, state):
+            result["status"] = "invalid_measurement"
+            return result
+        value = number(state.state)
+        if value is None or value < 0 or isinstance(state.state, bool):
+            result["status"] = "invalid_measurement"
+            return result
+        stamp = report_time(state)
+        max_age = min(120, self.config["phase_sensor_max_age_seconds"])
+        if not isinstance(stamp, datetime) or not 0 <= (now - stamp).total_seconds() <= max_age:
+            result["status"] = "stale"
+            return result
+        value *= {"W": 1, "kW": 1000, "MW": 1000000}[state.attributes["unit_of_measurement"]]
+        if not isfinite(value):
+            result["status"] = "invalid_measurement"
+            return result
+        result["measured_power_w"] = value
+        phase = rule["phase"]
+        if phase == "unknown":
+            result["status"] = "unknown_phase"
+            return result
+        # last_updated changes with either value or attributes, while unchanged
+        # reports can advance last_reported without changing the measured load.
+        changed = getattr(state, "last_updated", None) or stamp
+        if not isinstance(changed, datetime) or changed > stamp:
+            result["status"] = "waiting_phase_readback"
+            return result
+        indices = range(3) if phase == "3_phase" else (int(phase[-1]) - 1,)
+        phase_ids = self.config.get("phase_current_entities", [])
+        capacities = []
+        for index in indices:
+            phase_state = self.hass.states.get(phase_ids[index]) if len(phase_ids) == 3 else None
+            phase_stamp = report_time(phase_state)
+            amps = number(phase_state.state) if phase_state is not None else None
+            unit = (
+                phase_state.attributes.get("unit_of_measurement")
+                if phase_state is not None else None
+            )
+            if unit == "mA" and amps is not None:
+                amps /= 1000
+            if (not isinstance(phase_stamp, datetime) or amps is None
+                    or unit not in {"A", "mA"}
+                    or not 0 <= (now - phase_stamp).total_seconds() <= max_age
+                    or phase_stamp < changed):
+                result["status"] = "waiting_phase_readback"
+                return result
+            capacities.append(max(0.0, amps) * self.config["nominal_voltage_v"])
+        # A balanced three-phase mapping may only credit an equal share on all
+        # three phases; never credit more current than the phase meters contain.
+        represented = min(capacities) * len(capacities)
+        result.update(credited_power_w=min(value, rule["max_power_w"], represented),
+                      status="above_configured_max" if value > rule["max_power_w"] else "measured")
+        return result
+
+    def _phase_demand(self, rule: dict, now: datetime) -> tuple[float, float, float]:
+        additional_w = max(
+            0.0, rule["max_power_w"] - self._load_power(rule, now)["credited_power_w"],
+        )
+        amps = additional_w / self.config["nominal_voltage_v"]
         phase = rule["phase"]
         if phase == "3_phase":
             return (amps / 3,) * 3
@@ -352,10 +427,16 @@ class ThermalController:
                     "entity_id": entity_id,
                     "baseline": rule["baseline"],
                     "max_deviation": rule["max_deviation"],
+                    "phase": rule["phase"],
                     "adjustment": rule.get("adjustment", "both"),
                     "status": "off",
                     "target": {},
+                    "power": self._load_power(rule, now),
                 }
+                row["power"]["additional_power_w"] = max(
+                    0.0, rule["max_power_w"] - row["power"]["credited_power_w"],
+                )
+                row["additional_phase_current_a"] = self._phase_demand(rule, now)
                 rows.append(row)
                 if not self.enabled:
                     if zone.get("original"):
@@ -445,10 +526,10 @@ class ThermalController:
                 if not observed:
                     row["status"] = "target_unavailable"
                     continue
-                demand = self._phase_demand(rule) if increasing else (0.0,) * 3
-                reserved = self.phase_reservations(now)
+                demand = self._phase_demand(rule, now) if increasing else (0.0,) * 3
+                reserved = self.phase_reservations(now, exclude_entity_id=entity_id)
                 if increasing and (
-                    (self.phase_guard is not None and not self.phase_guard(demand))
+                    (self.phase_guard is not None and not self.phase_guard(demand, entity_id))
                     or stale_phases
                     or any(
                         max(0, amp) + reserve + extra

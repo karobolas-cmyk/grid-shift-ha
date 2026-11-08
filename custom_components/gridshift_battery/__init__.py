@@ -239,6 +239,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         elif isinstance(value, (list, tuple)):
             watched_entities.update(item for item in value if isinstance(item, str))
     watched_entities.update(rule["entity_id"] for rule in controller.config["climate_rules"])
+    watched_entities.update(rule["power_entity"] for rule in controller.config["climate_rules"]
+                            if rule.get("power_entity"))
 
     @callback
     def async_input_sensor_changed(event: Event) -> None:

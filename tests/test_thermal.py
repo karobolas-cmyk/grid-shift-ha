@@ -87,6 +87,95 @@ def test_thermostat_control_is_off_until_separately_enabled():
     assert calls == []
 
 
+def load_setup(value="1000", unit="W", phase="L2", maximum=3000):
+    rule = {**RULE, "power_entity": "sensor.zone_load", "phase": phase, "max_power_w": maximum}
+    controller, states, calls = setup(enabled=True, rules=[rule])
+    phase_ids = ["sensor.l1", "sensor.l2", "sensor.l3"]
+    controller.config["phase_current_entities"] = phase_ids
+    for entity_id in phase_ids:
+        states[entity_id] = SimpleNamespace(
+            state="10", last_reported=NOW, attributes={"unit_of_measurement": "A"},
+        )
+    states["sensor.zone_load"] = SimpleNamespace(
+        state=value, last_reported=NOW, last_updated=NOW,
+        attributes={"unit_of_measurement": unit},
+    )
+    return controller, states, calls, rule
+
+
+@pytest.mark.parametrize("value,unit", [("1000", "W"), ("1", "kW"), ("0.001", "MW")])
+def test_measured_load_only_reserves_additional_power_on_its_phase(value, unit):
+    controller, _, calls, rule = load_setup(value, unit)
+    assert controller._phase_demand(rule, NOW) == pytest.approx((0, 2000 / 230, 0))
+    evaluate(controller, currents=(1, 10, 3))
+    assert len(calls) == 1  # Adding the full 3000 W again would incorrectly block at 10 A.
+    power = controller.snapshot["zones"][0]["power"]
+    assert power["measured_power_w"] == 1000
+    assert power["additional_power_w"] == 2000
+
+
+@pytest.mark.parametrize("value,unit", [
+    ("unavailable", "W"), ("nan", "W"), ("inf", "W"), ("-1000", "W"),
+    ("1", "kWh"), (True, "W"),
+])
+def test_invalid_load_measurement_keeps_the_full_phase_reserve(value, unit):
+    controller, _, _, rule = load_setup(value, unit)
+    assert controller._phase_demand(rule, NOW) == pytest.approx((0, 3000 / 230, 0))
+
+
+@pytest.mark.parametrize("age", [-60, 1000])
+def test_future_or_stale_load_measurement_cannot_reduce_the_reserve(age):
+    controller, states, _, rule = load_setup()
+    states["sensor.zone_load"].last_reported = NOW - timedelta(seconds=age)
+    assert controller._phase_demand(rule, NOW) == pytest.approx((0, 3000 / 230, 0))
+
+
+def test_measurement_must_already_be_represented_in_the_phase_meter():
+    controller, states, _, rule = load_setup()
+    states["sensor.l2"].last_reported = NOW - timedelta(seconds=1)
+    assert controller._phase_demand(rule, NOW) == pytest.approx((0, 3000 / 230, 0))
+    assert controller._load_power(rule, NOW)["status"] == "waiting_phase_readback"
+    # Repeated unchanged reports are fresh; the value was present in the older phase readback.
+    states["sensor.zone_load"].last_updated = NOW - timedelta(seconds=10)
+    assert controller._phase_demand(rule, NOW) == pytest.approx((0, 2000 / 230, 0))
+
+
+def test_unknown_phase_and_unbalanced_readbacks_keep_conservative_reserves():
+    controller, states, _, rule = load_setup(phase="unknown")
+    assert controller._phase_demand(rule, NOW) == pytest.approx((3000 / 230,) * 3)
+    rule["phase"] = "3_phase"
+    assert controller._phase_demand(rule, NOW) == pytest.approx((2000 / 690,) * 3)
+    states["sensor.l1"].state = "0"
+    assert controller._phase_demand(rule, NOW) == pytest.approx((3000 / 690,) * 3)
+
+
+def test_phase_reserve_tracks_live_consumption_without_double_counting_the_same_zone():
+    controller, states, _, rule = load_setup()
+    controller.storage.state.thermal_state[RULE["entity_id"]] = {
+        "reserved_a": (0, 3000 / 230, 0),
+        "reserved_until": (NOW + timedelta(minutes=15)).isoformat(),
+    }
+    assert controller.phase_reservations(NOW) == pytest.approx((0, 2000 / 230, 0))
+    states["sensor.zone_load"].state = "2000"
+    assert controller.phase_reservations(NOW) == pytest.approx((0, 1000 / 230, 0))
+    states["sensor.zone_load"].state = "0"
+    assert controller.phase_reservations(NOW) == pytest.approx((0, 3000 / 230, 0))
+    assert controller.phase_reservations(NOW, exclude_entity_id=RULE["entity_id"]) == (0, 0, 0)
+    states["sensor.zone_load"].state = "1000"
+    rule.pop("power_entity")
+    assert controller.phase_reservations(NOW) == pytest.approx((0, 3000 / 230, 0))
+    assert controller.phase_reservations(NOW + timedelta(minutes=16)) == (0, 0, 0)
+
+
+def test_power_credit_never_exceeds_the_measured_current_or_configured_maximum():
+    controller, states, _, rule = load_setup("9000")
+    assert controller._load_power(rule, NOW)["credited_power_w"] == 2300
+    assert controller._load_power(rule, NOW)["status"] == "above_configured_max"
+    states["sensor.l2"].state = "20000"
+    states["sensor.l2"].attributes["unit_of_measurement"] = "mA"
+    assert controller._load_power(rule, NOW)["credited_power_w"] == 3000
+
+
 def test_empty_climate_configuration_returns_a_validation_error_without_enabling():
     controller, _, calls = setup(rules=[])
     assert controller.snapshot["configured_zone_count"] == 0
