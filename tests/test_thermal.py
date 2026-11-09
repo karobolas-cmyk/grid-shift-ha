@@ -460,3 +460,15 @@ def test_multiple_zones_do_not_write_or_start_together():
     evaluate(controller)
     assert len(calls) == 1
     assert controller.snapshot["zones"][1]["status"] == "rate_limited"
+
+
+def test_configuration_can_restore_saved_zones_without_controlling_devices() -> None:
+    thermal, _, calls = setup(enabled=False)
+    exported = thermal.configuration
+    assert exported["version"] == 1
+    assert exported["rules"] == [RULE]
+    exported["rules"][0]["baseline"] = 99
+    assert thermal.config["climate_rules"][0]["baseline"] == RULE["baseline"]
+    assert calls == []
+    empty, _, _ = setup(rules=[])
+    assert empty.configuration["rules"] == []

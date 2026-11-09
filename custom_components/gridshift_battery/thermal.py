@@ -181,6 +181,13 @@ class ThermalController:
         self.phase_guard = None
 
     @property
+    def configuration(self) -> dict:
+        """Publish saved rules so clients can recover their selection after reconnecting."""
+        return {
+            "version": 1, "rules": [dict(rule) for rule in self.config.get("climate_rules", [])]
+        }
+
+    @property
     def enabled(self) -> bool:
         return self.storage.state.thermal_enabled
 

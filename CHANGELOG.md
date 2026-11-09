@@ -309,3 +309,4 @@ All notable changes are documented here. The project follows semantic versioning
 - Added native control through `callifo/fronius_modbus` entities.
 
 
+
