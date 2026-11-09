@@ -630,3 +630,106 @@ def test_expired_plan_overrides_are_pruned() -> None:
     assert actuator.plan_overrides == {}
 
 
+
+
+def test_transient_pause_recovers_with_latest_plan_and_live_guard(monkeypatch) -> None:
+    actuator, events = controller()
+    original = actuator._async_apply_decision
+
+    async def fail(decision):
+        raise PowerReadbackError("setpoint was not confirmed")
+
+    async def no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(actuator, "_async_apply_decision", fail)
+    with pytest.raises(PowerReadbackError):
+        asyncio.run(actuator.async_apply(Decision("charge", 10000, "old_plan")))
+    fault = actuator.storage.state.control_fault
+    assert fault["auto_resume"] is True
+    assert fault["failures"] == 1
+    assert datetime.fromisoformat(fault["retry_at"]) > datetime.now(UTC)
+    before = list(events)
+    asyncio.run(actuator.async_apply(Decision("charge", 10000, "old_plan")))
+    assert events == before
+    fault["retry_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    monkeypatch.setattr(actuator, "_async_apply_decision", original)
+    monkeypatch.setattr(controller_module.asyncio, "sleep", no_sleep)
+    guard_calls = []
+    actuator.power_guard = lambda watts, action: guard_calls.append(watts) or min(watts, 2000)
+    asyncio.run(actuator.async_apply(Decision("charge", 4000, "new_plan")))
+    assert actuator.enabled is True
+    assert actuator.pause_reason is None
+    assert actuator.last_power_w == 2000
+    assert guard_calls and guard_calls[0] == 4000
+
+
+def test_recovery_backoff_is_bounded_and_manual_off_cancels_it(monkeypatch) -> None:
+    actuator, events = controller()
+
+    async def fail(decision):
+        raise TimeoutError("device timed out")
+
+    monkeypatch.setattr(actuator, "_async_apply_decision", fail)
+    for index, delay in enumerate((60, 120, 300, 600, 900, 900)):
+        if index:
+            actuator.storage.state.control_fault["retry_at"] = (
+                datetime.now(UTC) - timedelta(seconds=1)
+            ).isoformat()
+        before = datetime.now(UTC)
+        with pytest.raises(TimeoutError):
+            asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+        fault = actuator.storage.state.control_fault
+        remaining = (datetime.fromisoformat(fault["retry_at"]) - before).total_seconds()
+        assert delay <= remaining < delay + 2
+        assert fault["failures"] == index + 1
+    asyncio.run(actuator.async_set_enabled(False))
+    assert not actuator.storage.state.control_fault
+    before = list(events)
+    asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+    assert events == before
+    assert actuator.enabled is False
+
+
+def test_recovery_waits_for_mode_and_respects_manual_mode_change(monkeypatch) -> None:
+    actuator, events = controller()
+    actuator.storage.state.enabled = False
+    actuator.storage.state.control_fault = {
+        "reason": "control_paused_after_write_failure", "auto_resume": True,
+        "failures": 1, "retry_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        "recovery_mode": "Auto",
+    }
+    actuator.hass.states.values["select.storage_mode"].state = "unavailable"
+    asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+    assert actuator.enabled is False
+    assert events == []
+    actuator.hass.states.values["select.storage_mode"].state = "Block discharge"
+    asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+    assert actuator.enabled is False
+    assert actuator.recovery["automatic_retry"] is False
+    assert events == []
+
+
+def test_invalid_mapping_does_not_schedule_automatic_recovery() -> None:
+    actuator, _ = controller()
+    actuator.config[CONF_CHARGE_POWER_ENTITY] = actuator.config[CONF_DISCHARGE_POWER_ENTITY]
+    with pytest.raises(RuntimeError, match="invalid_power_entity_mapping"):
+        asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+    assert actuator.recovery["automatic_retry"] is False
+    assert actuator.recovery["retry_at"] is None
+
+
+def test_scheduled_recovery_survives_restart() -> None:
+    from custom_components.gridshift_battery.controller import BatteryController, RuntimeStorage
+
+    actuator, _ = controller()
+    fault = {"reason": "control_paused_after_write_failure", "auto_resume": True,
+             "failures": 3, "retry_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+             "recovery_mode": "Auto", "execution": {"paused": True}}
+    restored = RuntimeStorage(SimpleNamespace(), {"enabled": False, "control_fault": fault})
+    restarted = BatteryController(actuator.hass, actuator.config, restored)
+    assert restarted.enabled is False
+    assert restarted.recovery["failures"] == 3
+    assert restarted.recovery["retry_at"] == fault["retry_at"]
+    asyncio.run(restarted.async_apply(Decision("charge", 4000, "test")))
+    assert restarted.enabled is False

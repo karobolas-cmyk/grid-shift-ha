@@ -34,6 +34,22 @@ POWER_READBACK_TOLERANCE_W = 5.0
 POWER_ENTITY_TIMEOUT_SECONDS = 60.0
 POWER_WRITE_MAX_ATTEMPTS = 3
 POWER_WRITE_RETRY_SECONDS = 5.0
+CONTROL_RECOVERY_DELAYS_SECONDS = (60, 120, 300, 600, 900)
+
+
+def retryable_control_error(error: Exception | str) -> bool:
+    """Retry temporary device failures, never invalid setup or manual intervention."""
+    text = str(error).lower()
+    if any(word in text for word in ("invalid_", "disabled or fronius mode changed")):
+        return False
+    return isinstance(error, (PowerReadbackError, TimeoutError, ConnectionError, OSError)) or any(
+        word in text for word in (
+            "powerreadbackerror:", "timeouterror:", "connectionerror:",
+            "unavailable", "not available", "not ready", "busy", "temporar",
+            "timeout", "timed out", "connection reset", "connection refused",
+            "did not settle", "did not return to auto", "can only be changed in",
+        )
+    )
 
 
 class PowerReadbackError(RuntimeError):
@@ -84,6 +100,14 @@ class RuntimeStorage:
         )
         if self.state.control_fault:
             self.state.enabled = False
+            fault = self.state.control_fault
+            if "auto_resume" not in fault and retryable_control_error(fault.get("error", "")):
+                fault.update(
+                    auto_resume=True, failures=1,
+                    retry_at=(datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
+                    recovery_mode=(fault.get("execution", {}).get("fallback_mode")
+                                   or fault.get("execution", {}).get("requested_mode")),
+                )
         self.model = ConsumptionModel.from_dict(raw.get("model"))
 
     async def async_save(self) -> None:
@@ -123,6 +147,7 @@ class BatteryController:
         )
         self._apply_lock = asyncio.Lock()
         self._suspended = False
+        self._recovery_failures = 0
         self.power_guard: Callable[[int, str], int] | None = None
 
     @property
@@ -186,8 +211,8 @@ class BatteryController:
     async def async_set_enabled(self, enabled: bool) -> None:
         """Enable control, or safely hand control back to the inverter."""
         self.storage.state.enabled = enabled
-        if enabled:
-            self.storage.state.control_fault = {}
+        self.storage.state.control_fault = {}
+        self._recovery_failures = 0
         if not enabled:
             self._clear_force_state()
             await self.async_release_control()
@@ -485,8 +510,46 @@ class BatteryController:
         async with self._apply_lock:
             return await self._async_apply_serialized(decision)
 
+    @property
+    def recovery(self) -> dict[str, Any]:
+        """Expose the recovery deadline without changing the saved user intent."""
+        fault = self.storage.state.control_fault
+        return {"automatic_retry": bool(fault.get("auto_resume")),
+                "retry_at": fault.get("retry_at"), "failures": fault.get("failures", 0)}
+
+    async def _async_resume_if_due(self) -> None:
+        """Resume under the command lock; the new decision and live guard remain authoritative."""
+        fault = self.storage.state.control_fault
+        if self._suspended or self.enabled or not fault.get("auto_resume"):
+            return
+        try:
+            due = datetime.fromisoformat(fault["retry_at"])
+            if due.tzinfo is None or datetime.now(UTC) < due:
+                return
+        except (KeyError, TypeError, ValueError):
+            return
+        mode = self._mode()
+        if mode in (None, "", "unknown", "unavailable"):
+            return
+        expected = fault.get("recovery_mode")
+        allowed = {self.config[CONF_AUTO_MODE_OPTION], self.config[CONF_CHARGE_MODE_OPTION],
+                   self.config[CONF_BLOCK_DISCHARGE_MODE_OPTION]}
+        if self.discharge_enabled:
+            allowed.add(self.config[CONF_DISCHARGE_MODE_OPTION])
+        if mode not in allowed or expected and mode != expected:
+            fault.update(auto_resume=False, recovery_stopped_reason="manual_mode_override")
+            await self.storage.async_save()
+            return
+        self._recovery_failures = int(fault.get("failures", 1))
+        self.storage.state.control_fault = {}
+        self.storage.state.enabled = True
+        _LOGGER.warning(
+            "Retrying battery control after %s failed sequences", self._recovery_failures
+        )
+
     async def _async_apply_serialized(self, decision: Decision) -> str | None:
         """Keep mode, power write and acknowledgement in one serialized attempt."""
+        await self._async_resume_if_due()
         if not self._can_write:
             return self.pause_reason or ("control_reloading" if self._suspended else None)
 
@@ -571,11 +634,25 @@ class BatteryController:
                     "error": self.execution["error"],
                     "execution": dict(self.execution),
                 }
+                self._recovery_failures += 1
+                automatic_retry = retryable_control_error(err)
+                delay = CONTROL_RECOVERY_DELAYS_SECONDS[
+                    min(self._recovery_failures - 1, len(CONTROL_RECOVERY_DELAYS_SECONDS) - 1)
+                ]
+                retry_at = ((datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+                            if automatic_retry else None)
+                self.execution.update(automatic_retry=automatic_retry, retry_at=retry_at)
+                self.storage.state.control_fault.update(
+                    auto_resume=automatic_retry, failures=self._recovery_failures,
+                    retry_at=retry_at, recovery_mode=self._mode(),
+                    execution=dict(self.execution),
+                )
                 try:
                     await self.storage.async_save()
                 except Exception:
                     _LOGGER.exception("Could not persist the paused GridShift controller")
             raise
+        self._recovery_failures = 0
         self.execution.update(
             status="refused" if override else "confirmed",
             stage="complete",

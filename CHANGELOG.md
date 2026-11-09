@@ -308,3 +308,4 @@ All notable changes are documented here. The project follows semantic versioning
 - Added adaptive SoC targets, price planning, and three-phase fuse protection.
 - Added native control through `callifo/fronius_modbus` entities.
 
+
