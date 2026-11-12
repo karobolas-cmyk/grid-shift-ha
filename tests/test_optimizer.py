@@ -470,6 +470,10 @@ def test_26_kwh_battery_cannot_refill_in_45_minutes_at_10_kw() -> None:
     assert plan["target_soc_pct"] == 85
     assert plan["energy_needed_kwh"] > 20
     assert plan["required_charge_minutes"] > 120
+    assert plan["round_trip_efficiency_pct"] == 88.0
+    assert plan["min_savings_percent"] == 8.0
+    assert plan["cycle_cost_per_kwh"] == 0.0
+    assert plan["expensive_reference"] == decision.expensive_reference
     assert sum(session["minutes"] for session in plan["charge_sessions"]) >= 120
     assert sum(session["grid_energy_kwh"] for session in plan["charge_sessions"]) > 20
     assert plan["unmet_target_kwh"] < 0.02
