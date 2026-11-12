@@ -551,6 +551,10 @@ def optimize(data: OptimizerInput) -> Decision:
         "battery_capacity_kwh": data.battery_capacity_kwh,
         "target_soc_pct": automatic.adaptive_target_soc_pct,
         "energy_needed_kwh": automatic.energy_needed_kwh,
+        "round_trip_efficiency_pct": round(data.round_trip_efficiency * 100, 1),
+        "min_savings_percent": round(data.min_savings_percent, 1),
+        "cycle_cost_per_kwh": round(data.cycle_cost, 4),
+        "expensive_reference": automatic.expensive_reference,
         "stored_usable_energy_kwh": round(
             data.battery_capacity_kwh * max(0, data.soc_pct - data.min_soc_pct) / 100, 3
         ),

@@ -2,6 +2,13 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.14.9 - 2026-11-12
+
+- Publish the optimizer's round-trip efficiency, minimum-savings threshold,
+  cycle cost and expensive-price reference with every rolling battery plan.
+- Let dashboards explain why an unmet reserve target has no charge sessions
+  without guessing which economic assumptions Home Assistant is using.
+
 ## 0.14.1 - 2026-11-08
 
 - Preserve saved battery, grid-export and climate opt-ins across upgrades,
