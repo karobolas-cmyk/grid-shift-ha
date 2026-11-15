@@ -762,3 +762,36 @@ def test_scheduled_recovery_survives_restart() -> None:
     assert restarted.recovery["retry_at"] == fault["retry_at"]
     asyncio.run(restarted.async_apply(Decision("charge", 4000, "test")))
     assert restarted.enabled is False
+
+
+def test_upgrade_rearms_legacy_unclassified_pause() -> None:
+    from custom_components.gridshift_battery.controller import RuntimeStorage
+
+    fault = {
+        "reason": "control_paused_after_write_failure",
+        "error": "RuntimeError: Vendor service returned an unexpected transport response",
+        "auto_resume": False,
+        "execution": {"paused": True},
+    }
+    restored = RuntimeStorage(SimpleNamespace(), {"enabled": False, "control_fault": fault})
+    assert restored.state.control_fault["auto_resume"] is True
+    remaining = (
+        datetime.fromisoformat(restored.state.control_fault["retry_at"])
+        - datetime.now(UTC)
+    )
+    assert timedelta(minutes=59, seconds=58) < remaining <= timedelta(hours=1)
+
+
+def test_upgrade_preserves_recovery_stopped_by_manual_mode_change() -> None:
+    from custom_components.gridshift_battery.controller import RuntimeStorage
+
+    fault = {
+        "reason": "control_paused_after_write_failure",
+        "error": "RuntimeError: Vendor service returned an unexpected transport response",
+        "auto_resume": False,
+        "recovery_stopped_reason": "manual_mode_override",
+        "execution": {"paused": True},
+    }
+    restored = RuntimeStorage(SimpleNamespace(), {"enabled": False, "control_fault": fault})
+    assert restored.state.control_fault["auto_resume"] is False
+    assert "retry_at" not in restored.state.control_fault
