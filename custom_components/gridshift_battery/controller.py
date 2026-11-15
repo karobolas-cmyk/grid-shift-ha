@@ -34,20 +34,26 @@ POWER_READBACK_TOLERANCE_W = 5.0
 POWER_ENTITY_TIMEOUT_SECONDS = 60.0
 POWER_WRITE_MAX_ATTEMPTS = 3
 POWER_WRITE_RETRY_SECONDS = 5.0
-CONTROL_RECOVERY_DELAYS_SECONDS = (60, 120, 300, 600, 900)
+CONTROL_RECOVERY_INTERVAL_SECONDS = 60 * 60
 
 
 def retryable_control_error(error: Exception | str) -> bool:
-    """Retry temporary device failures, never invalid setup or manual intervention."""
+    """Retry write failures unless the setup or user intent is known to be invalid.
+
+    Integrations and transports do not expose a stable exception hierarchy. An
+    allow-list therefore leaves control permanently off whenever a vendor adds a
+    new error string. A latched write failure is safe to retry from the latest
+    plan once per hour; only deterministic configuration errors and explicit
+    user intervention must stop recovery.
+    """
     text = str(error).lower()
-    if any(word in text for word in ("invalid_", "disabled or fronius mode changed")):
-        return False
-    return isinstance(error, (PowerReadbackError, TimeoutError, ConnectionError, OSError)) or any(
-        word in text for word in (
-            "powerreadbackerror:", "timeouterror:", "connectionerror:",
-            "unavailable", "not available", "not ready", "busy", "temporar",
-            "timeout", "timed out", "connection reset", "connection refused",
-            "did not settle", "did not return to auto", "can only be changed in",
+    return not any(
+        word in text
+        for word in (
+            "invalid_",
+            "unsupported force action",
+            "disabled or fronius mode changed",
+            "manual_mode_override",
         )
     )
 
@@ -104,7 +110,9 @@ class RuntimeStorage:
             if "auto_resume" not in fault and retryable_control_error(fault.get("error", "")):
                 fault.update(
                     auto_resume=True, failures=1,
-                    retry_at=(datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
+                    retry_at=(datetime.now(UTC) + timedelta(
+                        seconds=CONTROL_RECOVERY_INTERVAL_SECONDS
+                    )).isoformat(),
                     recovery_mode=(fault.get("execution", {}).get("fallback_mode")
                                    or fault.get("execution", {}).get("requested_mode")),
                 )
@@ -536,7 +544,9 @@ class BatteryController:
                    self.config[CONF_BLOCK_DISCHARGE_MODE_OPTION]}
         if self.discharge_enabled:
             allowed.add(self.config[CONF_DISCHARGE_MODE_OPTION])
-        if mode not in allowed or expected and mode != expected:
+        # An outage can persist "unknown"/"unavailable" as the failure-time
+        # mode. That is not a manual change and must never cancel recovery.
+        if mode not in allowed or expected in allowed and mode != expected:
             fault.update(auto_resume=False, recovery_stopped_reason="manual_mode_override")
             await self.storage.async_save()
             return
@@ -636,10 +646,9 @@ class BatteryController:
                 }
                 self._recovery_failures += 1
                 automatic_retry = retryable_control_error(err)
-                delay = CONTROL_RECOVERY_DELAYS_SECONDS[
-                    min(self._recovery_failures - 1, len(CONTROL_RECOVERY_DELAYS_SECONDS) - 1)
-                ]
-                retry_at = ((datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+                retry_at = ((datetime.now(UTC) + timedelta(
+                    seconds=CONTROL_RECOVERY_INTERVAL_SECONDS
+                )).isoformat()
                             if automatic_retry else None)
                 self.execution.update(automatic_retry=automatic_retry, retry_at=retry_at)
                 self.storage.state.control_fault.update(

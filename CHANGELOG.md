@@ -2,6 +2,17 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.15.0 - 2026-11-15
+
+- Preserve the user's automatic-control intent after a battery write failure and
+  retry from the latest plan once per hour until Home Assistant, the inverter,
+  and fresh safety inputs are available again.
+- Recover old latched write faults after an upgrade, including faults whose
+  vendor-specific error text was not previously classified as temporary.
+- Do not mistake an `unknown` or `unavailable` failure-time inverter mode for a
+  later manual mode change. Explicit Off, invalid entity mappings, and genuine
+  manual mode changes still cancel recovery.
+
 ## 0.14.9 - 2026-11-12
 
 - Publish the optimizer's round-trip efficiency, minimum-savings threshold,

@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import sys
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -163,7 +164,12 @@ def test_configuration_save_does_not_rearm_an_off_or_faulted_controller(monkeypa
             **entry.data, "horizon_hours": 48,
         }}))
         assert store.raw["enabled"] is False
-        assert store.raw["control_fault"] == fault
+        assert store.raw["control_fault"]["reason"] == fault["reason"]
+        assert store.raw["control_fault"]["execution"] == fault["execution"]
+        assert store.raw["control_fault"]["auto_resume"] is True
+        retry_at = datetime.fromisoformat(store.raw["control_fault"]["retry_at"])
+        remaining = retry_at - datetime.now(UTC)
+        assert timedelta(minutes=59, seconds=58) < remaining <= timedelta(hours=1)
         assert events == []
 
     asyncio.run(run())
@@ -198,7 +204,9 @@ def test_real_fault_remains_paused_after_unload_and_reload(monkeypatch):
         assert await item.async_unload_entry(hass, entry)
         reloaded = RuntimeStorage(store, store.raw)
         assert reloaded.state.enabled is False
-        assert reloaded.state.control_fault == fault
+        assert reloaded.state.control_fault["reason"] == fault["reason"]
+        assert reloaded.state.control_fault["execution"] == fault["execution"]
+        assert reloaded.state.control_fault["auto_resume"] is True
         assert events == []
 
     asyncio.run(run())
