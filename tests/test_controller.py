@@ -664,14 +664,14 @@ def test_transient_pause_recovers_with_latest_plan_and_live_guard(monkeypatch) -
     assert guard_calls and guard_calls[0] == 4000
 
 
-def test_recovery_backoff_is_bounded_and_manual_off_cancels_it(monkeypatch) -> None:
+def test_recovery_retries_hourly_and_manual_off_cancels_it(monkeypatch) -> None:
     actuator, events = controller()
 
     async def fail(decision):
         raise TimeoutError("device timed out")
 
     monkeypatch.setattr(actuator, "_async_apply_decision", fail)
-    for index, delay in enumerate((60, 120, 300, 600, 900, 900)):
+    for index in range(6):
         if index:
             actuator.storage.state.control_fault["retry_at"] = (
                 datetime.now(UTC) - timedelta(seconds=1)
@@ -681,7 +681,7 @@ def test_recovery_backoff_is_bounded_and_manual_off_cancels_it(monkeypatch) -> N
             asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
         fault = actuator.storage.state.control_fault
         remaining = (datetime.fromisoformat(fault["retry_at"]) - before).total_seconds()
-        assert delay <= remaining < delay + 2
+        assert 3600 <= remaining < 3602
         assert fault["failures"] == index + 1
     asyncio.run(actuator.async_set_enabled(False))
     assert not actuator.storage.state.control_fault
@@ -708,6 +708,35 @@ def test_recovery_waits_for_mode_and_respects_manual_mode_change(monkeypatch) ->
     assert actuator.enabled is False
     assert actuator.recovery["automatic_retry"] is False
     assert events == []
+
+
+def test_recovery_ignores_unavailable_failure_time_mode() -> None:
+    actuator, events = controller()
+    actuator.storage.state.enabled = False
+    actuator.storage.state.control_fault = {
+        "reason": "control_paused_after_write_failure", "auto_resume": True,
+        "failures": 1, "retry_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        "recovery_mode": "unavailable",
+    }
+    actuator.hass.states.values["select.storage_mode"].state = "Auto"
+    asyncio.run(actuator.async_apply(Decision("idle", 0, "latest_plan")))
+    assert actuator.enabled is True
+    assert actuator.pause_reason is None
+
+
+def test_unclassified_write_error_is_retried_instead_of_killing_control(monkeypatch) -> None:
+    actuator, _ = controller()
+
+    async def fail(decision):
+        raise RuntimeError("Vendor service returned an unexpected transport response")
+
+    monkeypatch.setattr(actuator, "_async_apply_decision", fail)
+    with pytest.raises(RuntimeError):
+        asyncio.run(actuator.async_apply(Decision("charge", 4000, "test")))
+    recovery = actuator.recovery
+    assert recovery["automatic_retry"] is True
+    remaining = datetime.fromisoformat(recovery["retry_at"]) - datetime.now(UTC)
+    assert timedelta(minutes=59, seconds=58) < remaining <= timedelta(hours=1)
 
 
 def test_invalid_mapping_does_not_schedule_automatic_recovery() -> None:
