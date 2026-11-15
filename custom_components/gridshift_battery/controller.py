@@ -107,7 +107,12 @@ class RuntimeStorage:
         if self.state.control_fault:
             self.state.enabled = False
             fault = self.state.control_fault
-            if "auto_resume" not in fault and retryable_control_error(fault.get("error", "")):
+            explicitly_stopped = fault.get("recovery_stopped_reason") == "manual_mode_override"
+            if (
+                not explicitly_stopped
+                and retryable_control_error(fault.get("error", ""))
+                and not fault.get("auto_resume")
+            ):
                 fault.update(
                     auto_resume=True, failures=1,
                     retry_at=(datetime.now(UTC) + timedelta(
