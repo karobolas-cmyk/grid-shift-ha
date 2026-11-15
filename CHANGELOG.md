@@ -2,6 +2,12 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.15.1 - 2026-11-15
+
+- Migrate an already paused write fault whose older error classifier explicitly
+  stored `auto_resume: false`, so upgrading repairs the current paused state too.
+- Preserve recovery stops caused by a genuine manual inverter-mode change.
+
 ## 0.15.0 - 2026-11-15
 
 - Preserve the user's automatic-control intent after a battery write failure and
