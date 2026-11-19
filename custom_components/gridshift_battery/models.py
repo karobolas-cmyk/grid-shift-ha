@@ -93,6 +93,7 @@ class Decision:
     phase_limit_w: int = 0
     phase_data_age_seconds: float | None = None
     stale_phase_entities: tuple[str, ...] = field(default_factory=tuple)
+    phase_fallback_charge_power_w: int = 0
     adaptive_target_soc_pct: float | None = None
     energy_needed_kwh: float = 0.0
     forecast_expensive_load_kwh: float = 0.0

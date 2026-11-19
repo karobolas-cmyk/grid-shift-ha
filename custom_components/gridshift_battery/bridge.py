@@ -55,6 +55,7 @@ from .const import (
     CONF_NOMINAL_VOLTAGE_V,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_PRICE_AREA,
@@ -150,6 +151,7 @@ SETTING_FIELDS = {
     CONF_MIN_SOC_PCT,
     CONF_MODE_SETTLE_SECONDS,
     CONF_NOMINAL_VOLTAGE_V,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_ROUND_TRIP_EFFICIENCY,
@@ -202,6 +204,7 @@ NUMBER_RANGES = {
     CONF_MODE_SETTLE_SECONDS: (0, 120),
     CONF_NOMINAL_VOLTAGE_V: (200, 250),
     CONF_PHASE_SAFETY_MARGIN_A: (0, 10),
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W: (0, 50000),
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS: (15, 900),
     CONF_ROUND_TRIP_EFFICIENCY: (0.5, 1),
     CONF_SOLAR_PEAK_POWER_KWP: (0, 1000),
@@ -369,6 +372,17 @@ def validate_configuration(
         raise HomeAssistantError("maximum target state of charge must exceed minimum")
     if fuse <= 0 or margin < 0 or margin >= fuse:
         raise HomeAssistantError("phase safety margin must be lower than the main fuse")
+    fallback_w = float(result.get(CONF_PHASE_FALLBACK_CHARGE_POWER_W, 0))
+    max_charge_w = float(result.get(CONF_MAX_CHARGE_POWER_W, 5000))
+    nominal_voltage_v = float(result.get(CONF_NOMINAL_VOLTAGE_V, 230))
+    if fallback_w > max_charge_w:
+        raise HomeAssistantError(
+            "phase fallback charge power must not exceed maximum charge power"
+        )
+    if fallback_w > (fuse - margin) * nominal_voltage_v * 3:
+        raise HomeAssistantError(
+            "phase fallback charge power exceeds the configured fuse limit"
+        )
     home = result.get(CONF_TIBBER_HOME, "")
     if not isinstance(home, str) or len(home) > 128:
         raise HomeAssistantError("tibber_home must be a home name or an empty string")

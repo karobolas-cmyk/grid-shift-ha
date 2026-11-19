@@ -37,6 +37,7 @@
           "min_soc_pct": "Minimum state of charge",
           "max_target_soc_pct": "Maximum optimization target",
           "max_charge_power_w": "Maximum grid charge power",
+          "phase_fallback_charge_power_w": "Fallback charge power when phase data is unavailable",
           "max_discharge_power_w": "Maximum grid discharge power",
           "main_fuse_a": "Main fuse per phase",
           "phase_safety_margin_a": "Safety margin per phase",
@@ -71,6 +72,8 @@
       "entity_unavailable": "One or more selected entities are unavailable.",
       "three_phases_required": "Select exactly three phase-current entities.",
       "target_not_above_minimum": "The target state of charge must exceed the minimum.",
+      "fallback_exceeds_charge_limit": "Fallback charge power must not exceed maximum charge power.",
+      "fallback_exceeds_fuse_limit": "Fallback charge power exceeds the configured fuse limit.",
       "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
       "invalid_energy_selection": "The energy mapping could not be read. Review the selected entities and try again.",
       "configuration_step_failed": "The next settings page could not be opened. Check the Home Assistant log for the detailed GridShift error.",
@@ -89,6 +92,7 @@
           "min_soc_pct": "Minimum state of charge",
           "max_target_soc_pct": "Maximum optimization target",
           "max_charge_power_w": "Maximum grid charge power",
+          "phase_fallback_charge_power_w": "Fallback charge power when phase data is unavailable",
           "max_discharge_power_w": "Maximum grid discharge power",
           "main_fuse_a": "Main fuse per phase",
           "phase_safety_margin_a": "Safety margin per phase",
@@ -121,6 +125,8 @@
     },
     "error": {
       "target_not_above_minimum": "The target state of charge must exceed the minimum.",
+      "fallback_exceeds_charge_limit": "Fallback charge power must not exceed maximum charge power.",
+      "fallback_exceeds_fuse_limit": "Fallback charge power exceeds the configured fuse limit.",
       "margin_exceeds_fuse": "The phase safety margin must be lower than the main fuse.",
       "required_control_modes_missing": "The selected storage-control entity does not expose the configured GridShift modes."
     },

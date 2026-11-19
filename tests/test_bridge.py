@@ -17,6 +17,7 @@ from custom_components.gridshift_battery.const import (
     CONF_HOUSE_LOAD_ENTITY,
     CONF_HOUSE_LOAD_IS_GRID_POWER,
     CONF_PHASE_CURRENT_ENTITIES,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W,
     CONF_PRICE_ENTITY,
     CONF_SOC_ENTITY,
 )
@@ -63,6 +64,27 @@ def valid_configuration() -> dict:
 def test_bridge_accepts_unavailable_mode_specific_number() -> None:
     hass = SimpleNamespace(states=States())
     assert validate_configuration(hass, valid_configuration()) == valid_configuration()
+
+
+def test_bridge_accepts_bounded_phase_fallback_charge_power() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = {
+        **valid_configuration(),
+        "max_charge_power_w": 5000,
+        CONF_PHASE_FALLBACK_CHARGE_POWER_W: 3000,
+    }
+    assert validate_configuration(hass, configuration) == configuration
+
+
+def test_bridge_rejects_phase_fallback_above_maximum_charge_power() -> None:
+    hass = SimpleNamespace(states=States())
+    configuration = {
+        **valid_configuration(),
+        "max_charge_power_w": 2000,
+        CONF_PHASE_FALLBACK_CHARGE_POWER_W: 3000,
+    }
+    with pytest.raises(HomeAssistantError, match="must not exceed maximum charge power"):
+        validate_configuration(hass, configuration)
 
 
 def test_bridge_rejects_wrong_entity_domain() -> None:

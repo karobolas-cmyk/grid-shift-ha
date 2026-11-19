@@ -37,6 +37,7 @@
           "min_soc_pct": "Lägsta laddnivå",
           "max_target_soc_pct": "Högsta optimeringsmål",
           "max_charge_power_w": "Högsta laddeffekt från nätet",
+          "phase_fallback_charge_power_w": "Reservladdeffekt när fasvärden saknas",
           "max_discharge_power_w": "Högsta urladdningseffekt till nätet",
           "main_fuse_a": "Huvudsäkring per fas",
           "phase_safety_margin_a": "Säkerhetsmarginal per fas",
@@ -71,6 +72,8 @@
       "entity_unavailable": "En eller flera valda entiteter är otillgängliga.",
       "three_phases_required": "Välj exakt tre fasströmsentiteter.",
       "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
+      "fallback_exceeds_charge_limit": "Reservladdeffekten får inte överstiga högsta laddeffekt.",
+      "fallback_exceeds_fuse_limit": "Reservladdeffekten överstiger den inställda säkringsgränsen.",
       "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
       "invalid_energy_selection": "Energimappningen kunde inte läsas. Granska valda entiteter och försök igen.",
       "configuration_step_failed": "Nästa inställningssida kunde inte öppnas. Kontrollera Home Assistant-loggen för det detaljerade GridShift-felet.",
@@ -89,6 +92,7 @@
           "min_soc_pct": "Lägsta laddnivå",
           "max_target_soc_pct": "Högsta optimeringsmål",
           "max_charge_power_w": "Högsta laddeffekt från nätet",
+          "phase_fallback_charge_power_w": "Reservladdeffekt när fasvärden saknas",
           "max_discharge_power_w": "Högsta urladdningseffekt till nätet",
           "main_fuse_a": "Huvudsäkring per fas",
           "phase_safety_margin_a": "Säkerhetsmarginal per fas",
@@ -121,6 +125,8 @@
     },
     "error": {
       "target_not_above_minimum": "Målladdnivån måste vara högre än miniminivån.",
+      "fallback_exceeds_charge_limit": "Reservladdeffekten får inte överstiga högsta laddeffekt.",
+      "fallback_exceeds_fuse_limit": "Reservladdeffekten överstiger den inställda säkringsgränsen.",
       "margin_exceeds_fuse": "Fasens säkerhetsmarginal måste vara lägre än huvudsäkringen.",
       "required_control_modes_missing": "Den valda lagringsstyrningen saknar något av de konfigurerade GridShift-lägena."
     },

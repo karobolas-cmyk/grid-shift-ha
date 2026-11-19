@@ -53,6 +53,7 @@ CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
 CONF_MIN_SOC_PCT = "min_soc_pct"
 CONF_MAX_TARGET_SOC_PCT = "max_target_soc_pct"
 CONF_MAX_CHARGE_POWER_W = "max_charge_power_w"
+CONF_PHASE_FALLBACK_CHARGE_POWER_W = "phase_fallback_charge_power_w"
 CONF_MAX_DISCHARGE_POWER_W = "max_discharge_power_w"
 CONF_MAIN_FUSE_A = "main_fuse_a"
 CONF_PHASE_SAFETY_MARGIN_A = "phase_safety_margin_a"
@@ -99,6 +100,7 @@ DEFAULTS = {
     CONF_MIN_SOC_PCT: 15.0,
     CONF_MAX_TARGET_SOC_PCT: 85.0,
     CONF_MAX_CHARGE_POWER_W: 5000,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W: 0,
     CONF_MAX_DISCHARGE_POWER_W: 5000,
     CONF_MAIN_FUSE_A: 20.0,
     CONF_PHASE_SAFETY_MARGIN_A: 1.0,

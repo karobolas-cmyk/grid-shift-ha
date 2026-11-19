@@ -46,6 +46,7 @@ from .const import (
     CONF_NOMINAL_VOLTAGE_V,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_PRICE_ENTITY,
@@ -169,6 +170,10 @@ def _limits_schema(values: dict[str, Any]) -> vol.Schema:
                 description=suggested(CONF_MAX_CHARGE_POWER_W),
             ): _number(100, 50000, 10, "W"),
             vol.Required(
+                CONF_PHASE_FALLBACK_CHARGE_POWER_W,
+                description=suggested(CONF_PHASE_FALLBACK_CHARGE_POWER_W),
+            ): _number(0, 50000, 100, "W"),
+            vol.Required(
                 CONF_MAX_DISCHARGE_POWER_W,
                 description=suggested(CONF_MAX_DISCHARGE_POWER_W),
             ): _number(100, 50000, 10, "W"),
@@ -284,6 +289,13 @@ def _validate_limits(data: dict[str, Any]) -> str | None:
         return "target_not_above_minimum"
     if data[CONF_PHASE_SAFETY_MARGIN_A] >= data[CONF_MAIN_FUSE_A]:
         return "margin_exceeds_fuse"
+    if data[CONF_PHASE_FALLBACK_CHARGE_POWER_W] > data[CONF_MAX_CHARGE_POWER_W]:
+        return "fallback_exceeds_charge_limit"
+    fuse_limit_w = (
+        data[CONF_MAIN_FUSE_A] - data[CONF_PHASE_SAFETY_MARGIN_A]
+    ) * data[CONF_NOMINAL_VOLTAGE_V] * 3
+    if data[CONF_PHASE_FALLBACK_CHARGE_POWER_W] > fuse_limit_w:
+        return "fallback_exceeds_fuse_limit"
     return None
 
 

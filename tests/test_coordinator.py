@@ -163,6 +163,21 @@ def test_reported_zero_phases_and_battery_supplied_house_still_plan(monkeypatch)
         assert item.prices.snapshot["status"] == "ready"
         assert len(item.prices.snapshot["slots"]) == 2
 
+        # A homeowner-declared fallback only keeps planned charging alive. It
+        # caps both the plan and the final write while discharge stays disabled.
+        item.config["phase_fallback_charge_power_w"] = 3000
+        async def async_force_charge(*args):
+            return "charge"
+
+        controller.async_active_force_action = async_force_charge
+        fallback_decision = await item._async_update_data()
+        assert fallback_decision.action == "charge"
+        assert fallback_decision.charge_power_w == 3000
+        assert fallback_decision.discharge_power_w == 0
+        assert fallback_decision.stale_phase_entities == ("sensor.l2",)
+        assert fallback_decision.phase_fallback_charge_power_w == 3000
+        assert item._guard_power_write(5000, "charge") == 3000
+
     asyncio.run(run())
 
 

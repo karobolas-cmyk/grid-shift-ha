@@ -51,6 +51,7 @@ from .const import (
     CONF_NOMINAL_VOLTAGE_V,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PHASE_CURRENT_ENTITIES,
+    CONF_PHASE_FALLBACK_CHARGE_POWER_W,
     CONF_PHASE_SAFETY_MARGIN_A,
     CONF_PHASE_SENSOR_MAX_AGE_SECONDS,
     CONF_ROUND_TRIP_EFFICIENCY,
@@ -157,8 +158,6 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
     def _guard_power_write(self, requested_w: int, action: str) -> int:
         """Recheck live safety after settling and before each rate-write attempt."""
         currents, _, stale = self._phase_currents(dt_util.now())
-        if stale:
-            raise LiveSafetyError(f"phase_sensor_stale before rate write: {', '.join(stale)}")
         try:
             soc = self._value(self.config[CONF_SOC_ENTITY])
         except UpdateFailed as err:
@@ -168,6 +167,17 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         if action == "charge":
             if soc >= self.config[CONF_MAX_TARGET_SOC_PCT]:
                 raise LiveSafetyError("state_of_charge_limit before rate write")
+            if stale:
+                fallback_w = min(
+                    self.config[CONF_PHASE_FALLBACK_CHARGE_POWER_W],
+                    self.config[CONF_MAX_CHARGE_POWER_W],
+                )
+                command = min(requested_w, fallback_w)
+                if command < 100:
+                    raise LiveSafetyError(
+                        f"phase_sensor_stale before rate write: {', '.join(stale)}"
+                    )
+                return command
             reserves = self.thermal.phase_reservations(dt_util.now())
             headroom = min(
                 self.config[CONF_MAIN_FUSE_A]
@@ -185,6 +195,8 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             if command < 100:
                 raise LiveSafetyError("phase_capacity_exhausted before rate write")
             return command
+        if stale:
+            raise LiveSafetyError(f"phase_sensor_stale before rate write: {', '.join(stale)}")
         if not self.controller.discharge_enabled or soc <= self.config[CONF_MIN_SOC_PCT]:
             raise LiveSafetyError("discharge_safety_limit before rate write")
         return requested_w
@@ -391,7 +403,11 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         now = dt_util.now()
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
         currents, phase_data_age, stale_phase_entities = self._phase_currents(now)
-        if stale_phase_entities:
+        fallback_w = min(
+            self.config[CONF_PHASE_FALLBACK_CHARGE_POWER_W],
+            self.config[CONF_MAX_CHARGE_POWER_W],
+        )
+        if stale_phase_entities and fallback_w < 100:
             # Price visibility does not depend on having safe phase inputs.
             # The physical failsafe below must still run immediately.
             if self.price_task is None or self.price_task.done():
@@ -414,7 +430,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             self.thermal_task = self.hass.async_create_task(
                 self.thermal.async_evaluate(slots, now, currents, stale_phase_entities)
             )
-        if stale_phase_entities:
+        if stale_phase_entities and fallback_w < 100:
             return await self._phase_data_failsafe(
                 phase_data_age, stale_phase_entities
             )
@@ -477,13 +493,31 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
             if force_action is not None
             else await self.controller.async_active_plan_action(now)
         )
+        optimizer_currents = currents
+        optimizer_discharge_enabled = self.controller.discharge_enabled
+        if stale_phase_entities:
+            previous_charge_w = self._previous_grid_charge_w(now)
+            fallback_headroom_a = max(0, fallback_w - previous_charge_w) / max(
+                1, self.config[CONF_NOMINAL_VOLTAGE_V] * 3
+            )
+            fallback_current_a = max(
+                0.0,
+                self.config[CONF_MAIN_FUSE_A]
+                - self.config[CONF_PHASE_SAFETY_MARGIN_A]
+                - fallback_headroom_a,
+            )
+            optimizer_currents = (fallback_current_a,) * 3
+            optimizer_discharge_enabled = False
         decision = optimize(
             OptimizerInput(
                 now=now,
                 soc_pct=self._value(self.config[CONF_SOC_ENTITY]),
                 phase_currents_a=tuple(
                     current + reserve for current, reserve in zip(
-                        currents, self.thermal.phase_reservations(now), strict=True,
+                        optimizer_currents,
+                        (0.0, 0.0, 0.0) if stale_phase_entities
+                        else self.thermal.phase_reservations(now),
+                        strict=True,
                     )
                 ),  # type: ignore[arg-type]
                 price_slots=slots,
@@ -501,7 +535,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 min_savings_percent=self.config[CONF_MIN_SAVINGS_PERCENT],
                 cycle_cost=self.config[CONF_CYCLE_COST],
                 previous_charge_power_w=self._previous_grid_charge_w(now),
-                discharge_enabled=self.controller.discharge_enabled,
+                discharge_enabled=optimizer_discharge_enabled,
                 force_action=force_action or plan_action,
                 plan_overrides=self.controller.plan_overrides,
                 winter_active=self.config[CONF_SWEDISH_WINTER_MODE]
@@ -530,7 +564,12 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
         )
         decision = replace(
             decision,
-            phase_data_age_seconds=round(phase_data_age, 1),
+            phase_data_age_seconds=(
+                round(phase_data_age, 1)
+                if phase_data_age != float("inf") else None
+            ),
+            stale_phase_entities=stale_phase_entities,
+            phase_fallback_charge_power_w=(fallback_w if stale_phase_entities else 0),
         )
         if plan_action is not None:
             plan_reasons = {
