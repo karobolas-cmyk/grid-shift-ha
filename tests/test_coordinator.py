@@ -6,6 +6,8 @@ import sys
 from datetime import UTC, datetime, timedelta
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from custom_components.gridshift_battery.controller import RuntimeStorage
 from custom_components.gridshift_battery.models import Decision
 
@@ -37,6 +39,210 @@ def coordinator_class(monkeypatch):
     name = "custom_components.gridshift_battery.coordinator"
     monkeypatch.delitem(sys.modules, name, raising=False)
     return importlib.import_module(name).GridShiftCoordinator
+
+
+def climate_home(monkeypatch, mode="heat", price_now=5, price_next=1):
+    cls = coordinator_class(monkeypatch)
+    states = {
+        f"sensor.l{index}": SimpleNamespace(
+            state="1", last_reported=NOW - timedelta(minutes=3),
+            attributes={"unit_of_measurement": "A"},
+        )
+        for index in (1, 2, 3)
+    }
+    states["climate.room"] = SimpleNamespace(
+        state=mode, last_reported=NOW - timedelta(hours=7), attributes={
+            "current_temperature": 21, "temperature": 21,
+            "min_temp": 7, "max_temp": 30, "target_temp_step": 0.5,
+        },
+    )
+    states["sensor.price"] = SimpleNamespace(
+        state=str(price_now), attributes={"prices": [
+            {"start": NOW.isoformat(), "end": (NOW + timedelta(minutes=15)).isoformat(),
+             "price": price_now},
+            {"start": (NOW + timedelta(minutes=15)).isoformat(),
+             "end": (NOW + timedelta(minutes=30)).isoformat(), "price": price_next},
+        ]},
+    )
+    for entity_id, value, unit in (
+        ("sensor.soc", 50, "%"), ("sensor.grid", 1000, "W"),
+        ("sensor.battery", 0, "W"),
+    ):
+        states[entity_id] = SimpleNamespace(
+            state=str(value), last_reported=NOW, attributes={"unit_of_measurement": unit},
+        )
+    tasks, writes, releases = [], [], []
+
+    def create_task(coroutine):
+        task = asyncio.create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    async def save(data):
+        pass
+
+    async def release():
+        releases.append(True)
+
+    async def no_action(*args):
+        pass
+
+    async def call(domain, service, data, **kwargs):
+        writes.append((domain, service, data))
+        states[data["entity_id"]].attributes.update(data)
+
+    hass = SimpleNamespace(
+        states=SimpleNamespace(get=states.get), async_create_task=create_task,
+        services=SimpleNamespace(has_service=lambda *args: False, async_call=call),
+    )
+    config = {
+        "price_entity": "sensor.price", "soc_entity": "sensor.soc",
+        "house_load_entity": "sensor.grid", "house_load_source": "grid",
+        "battery_power_entity": "sensor.battery",
+        "phase_current_entities": ["sensor.l1", "sensor.l2", "sensor.l3"],
+        "climate_rules": [{
+            "entity_id": "climate.room", "baseline": 21, "max_deviation": 1,
+            "weight": 10, "mode": "scale", "direction": "auto", "heater_type": "air_air",
+            "scop": 3.5, "max_power_w": 1000, "phase": "L1",
+        }],
+    }
+    controller = SimpleNamespace(
+        enabled=True, last_power_w=0, discharge_enabled=False, plan_overrides={},
+        async_release_control=release, async_active_force_action=no_action,
+        async_active_plan_action=no_action, async_apply=no_action,
+    )
+    item = cls(
+        hass, SimpleNamespace(data=config, options={}, entry_id="entry", title="Home"),
+        RuntimeStorage(SimpleNamespace(async_save=save), {"thermal_enabled": True}), controller,
+    )
+    return item, states, tasks, writes, releases
+
+
+@pytest.mark.parametrize("mode,price_now,price_next,target,status", [
+    ("heat", 5, 1, 20, "confirmed"), ("cool", 5, 1, 22, "confirmed"),
+    ("heat", 1, 5, None, "phase_limit"), ("cool", 1, 5, None, "phase_limit"),
+])
+def test_stale_phases_allow_climate_setback_but_block_more_demand(
+    monkeypatch, mode, price_now, price_next, target, status,
+):
+    async def run():
+        item, _, tasks, writes, releases = climate_home(monkeypatch, mode, price_now, price_next)
+        decision = await item._async_update_data()
+        assert decision.reason == "phase_sensor_stale"
+        assert releases == [True]
+        await asyncio.gather(*tasks)
+        assert writes == ([] if target is None else [(
+            "climate", "set_temperature", {"entity_id": "climate.room", "temperature": target},
+        )])
+        assert item.thermal.snapshot["zones"][0]["status"] == status
+        assert item.thermal.snapshot["outdoor_temperature_assumed"] is True
+
+    asyncio.run(run())
+
+
+def test_climate_increase_resumes_when_phase_reports_recover(monkeypatch):
+    async def run():
+        item, states, tasks, writes, _ = climate_home(monkeypatch, price_now=1, price_next=5)
+        await item._async_update_data()
+        await asyncio.gather(*tasks)
+        assert writes == []
+        for index in (1, 2, 3):
+            states[f"sensor.l{index}"].last_reported = NOW
+        await item._async_update_data()
+        await asyncio.gather(*tasks)
+        assert writes == [(
+            "climate", "set_temperature", {"entity_id": "climate.room", "temperature": 22},
+        )]
+        assert item.thermal.snapshot["zones"][0]["status"] == "confirmed"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("low,high,expected_status", [
+    (18, 24, "phase_limit"), (21, 23, "phase_limit"), (19, 21, "phase_limit"),
+    (21, 22, "confirmed"),
+])
+def test_stale_phases_guard_each_side_of_combined_heating_and_cooling(
+    monkeypatch, low, high, expected_status,
+):
+    async def run():
+        item, states, tasks, writes, _ = climate_home(monkeypatch, mode="heat_cool")
+        attributes = states["climate.room"].attributes
+        attributes.pop("temperature")
+        attributes.update(target_temp_low=low, target_temp_high=high)
+        await item._async_update_data()
+        await asyncio.gather(*tasks)
+        assert item.thermal.snapshot["zones"][0]["status"] == expected_status
+        assert writes == ([] if expected_status == "phase_limit" else [(
+            "climate", "set_temperature", {
+                "entity_id": "climate.room", "target_temp_low": 20, "target_temp_high": 22,
+            },
+        )])
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("stopping", [False, True])
+def test_slow_prices_never_delay_battery_failsafe_or_write_after_stop(monkeypatch, stopping):
+    async def run():
+        item, _, tasks, writes, releases = climate_home(monkeypatch)
+        original_prices = item.prices.async_prices
+        gate = asyncio.Event()
+
+        async def prices(now):
+            await gate.wait()
+            return await original_prices(now)
+
+        item.prices.async_prices = prices
+        decision = await item._async_update_data()
+        assert decision.reason == "phase_sensor_stale"
+        assert releases == [True]
+        assert writes == []
+        assert not item.price_task.done()
+        item.stopping = stopping
+        gate.set()
+        await asyncio.gather(*tasks)
+        assert len(writes) == (0 if stopping else 1)
+
+    asyncio.run(run())
+
+
+def test_unload_can_cancel_prices_and_drain_the_waiting_climate_worker(monkeypatch):
+    async def run():
+        item, _, tasks, writes, _ = climate_home(monkeypatch)
+        gate = asyncio.Event()
+
+        async def prices(now):
+            await gate.wait()
+
+        item.prices.async_prices = prices
+        await item._async_update_data()
+        await asyncio.sleep(0)
+        item.stopping = True
+        item.price_task.cancel()
+        await item.thermal_task
+        await asyncio.gather(*tasks, return_exceptions=True)
+        assert writes == []
+        assert not item.thermal_task.cancelled()
+
+    asyncio.run(run())
+
+
+def test_failed_price_fetch_does_not_claim_a_thermostat(monkeypatch):
+    async def run():
+        item, _, tasks, writes, _ = climate_home(monkeypatch)
+
+        async def prices(now):
+            raise RuntimeError("price provider offline")
+
+        item.prices.async_prices = prices
+        await item._async_update_data()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        assert item.thermal_task.exception() is None
+        assert writes == []
+        assert "original" not in item.storage.state.thermal_state["climate.room"]
+
+    asyncio.run(run())
 
 
 def test_reported_zero_phases_and_battery_supplied_house_still_plan(monkeypatch):

@@ -524,18 +524,19 @@ class ThermalController:
                 # No valid plan: restore our baseline, do not claim an unowned thermostat.
                 if waiting and not zone.get("original"):
                     continue
+                if not observed or observed.keys() != target.keys():
+                    row["status"] = "target_unavailable"
+                    continue
                 increasing = (
-                    bool(observed)
-                    and state.state != "heat_cool"
-                    and (
+                    target["target_temp_low"] > observed["target_temp_low"]
+                    or target["target_temp_high"] < observed["target_temp_high"]
+                    if state.state == "heat_cool"
+                    else (
                         (target.get("temperature", 0) - observed.get("temperature", 0))
                         * (-1 if state.state == "cool" else 1)
                         > 0
                     )
                 )
-                if not observed:
-                    row["status"] = "target_unavailable"
-                    continue
                 demand = self._phase_demand(rule, now) if increasing else (0.0,) * 3
                 reserved = self.phase_reservations(now, exclude_entity_id=entity_id)
                 if increasing and (

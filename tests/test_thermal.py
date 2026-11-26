@@ -290,7 +290,7 @@ def test_disable_restores_the_previous_target_if_still_owned():
     assert states["climate.living_room"].attributes["temperature"] == 21
 
 
-def test_missing_optional_weather_uses_a_conservative_planning_temperature():
+def test_missing_optional_weather_uses_the_reference_planning_temperature():
     controller, states, calls = setup(enabled=True)
     states.pop("sensor.outdoor")
     evaluate(controller)
@@ -468,6 +468,17 @@ def test_missing_current_temperature_still_blocks_a_write():
     evaluate(controller)
     assert calls == []
     assert controller.snapshot["zones"][0]["status"] == "temperature_unavailable"
+
+
+def test_incomplete_combined_heating_and_cooling_target_blocks_a_write():
+    controller, states, calls = setup(enabled=True)
+    state = states[RULE["entity_id"]]
+    state.state = "heat_cool"
+    state.attributes.pop("temperature")
+    state.attributes["target_temp_low"] = 21
+    evaluate(controller)
+    assert calls == []
+    assert controller.snapshot["zones"][0]["status"] == "target_unavailable"
 
 
 def test_multiple_zones_do_not_write_or_start_together():

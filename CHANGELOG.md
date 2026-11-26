@@ -2,6 +2,22 @@
 
 All notable changes are documented here. The project follows semantic versioning.
 
+## 0.15.5 - 2026-11-26
+
+- Keep thermostat price planning active when stale phase readings stop battery
+  control. Heating and cooling setbacks can proceed; demand increases wait for
+  fresh phase readings and sufficient capacity, including combined heat/cool bands.
+- Treat available thermostats with valid unchanged room temperatures as
+  controllable and retain their report age in diagnostics.
+- Make outdoor weather optional for climate control. Use the COP reference
+  temperature of 7 °C when unavailable and explicitly report that assumption.
+- Fetch prices in the background without delaying the battery failsafe; drain
+  the waiting climate worker safely during an integration reload.
+- Include the previously unreleased, opt-in battery charge fallback for stale
+  phase sensors. Keep its configured limit and preserve explicit Off states.
+- Add regression coverage for thermostat writes, demand increases, phase recovery,
+  missing weather, slow/failed prices and shutdown while prices are loading.
+
 ## 0.15.1 - 2026-11-15
 
 - Migrate an already paused write fault whose older error classifier explicitly

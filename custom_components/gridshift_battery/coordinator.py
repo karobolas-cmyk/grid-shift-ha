@@ -399,6 +399,24 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
 
         self.notification_task = self.hass.async_create_task(evaluate())
 
+    async def _async_thermal_after_prices(self, price_task) -> None:
+        """Keep climate planning independent of battery phase protection."""
+        try:
+            slots = await price_task
+        except asyncio.CancelledError:
+            # Unload cancels the price fetch before draining this climate worker.
+            if self.stopping:
+                return
+            raise
+        except Exception:
+            _LOGGER.exception("Could not fetch prices for climate control")
+            slots = ()
+        if self.stopping:
+            return
+        now = dt_util.now()
+        currents, _, stale_phase_entities = self._phase_currents(now)
+        await self.thermal.async_evaluate(slots, now, currents, stale_phase_entities)
+
     async def _async_decide(self) -> Decision:
         now = dt_util.now()
         self.power_snapshot = power_snapshot(self.hass, self.config, now)
@@ -414,7 +432,7 @@ class GridShiftCoordinator(DataUpdateCoordinator[Decision]):
                 self.price_task = self.hass.async_create_task(self.prices.async_prices(now))
             if self.thermal_task is None or self.thermal_task.done():
                 self.thermal_task = self.hass.async_create_task(
-                    self.thermal.async_evaluate((), now, currents, stale_phase_entities)
+                    self._async_thermal_after_prices(self.price_task)
                 )
             return await self._phase_data_failsafe(phase_data_age, stale_phase_entities)
         if self.price_task and not self.price_task.done():
