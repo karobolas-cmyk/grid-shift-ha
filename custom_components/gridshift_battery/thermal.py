@@ -505,10 +505,7 @@ class ThermalController:
                     target=target,
                     observed=observed,
                     direction=state.state,
-                    status="waiting_prices"
-                    if not slots
-                    if waiting
-                    else "planned",
+                    status="waiting_prices" if waiting else "planned",
                     cop=round(
                         cop(
                             rule["heater_type"],
