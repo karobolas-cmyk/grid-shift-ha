@@ -290,6 +290,17 @@ def test_disable_restores_the_previous_target_if_still_owned():
     assert states["climate.living_room"].attributes["temperature"] == 21
 
 
+def test_missing_optional_weather_uses_a_conservative_planning_temperature():
+    controller, states, calls = setup(enabled=True)
+    states.pop("sensor.outdoor")
+    evaluate(controller)
+    assert len(calls) == 1
+    assert calls[0][2]["temperature"] == 22
+    assert controller.snapshot["outdoor_temperature"] is None
+    assert controller.snapshot["planning_outdoor_temperature"] == 7.0
+    assert controller.snapshot["outdoor_temperature_assumed"] is True
+
+
 def test_missing_prices_returns_an_owned_target_to_baseline():
     controller, states, calls = setup(enabled=True)
     evaluate(controller)

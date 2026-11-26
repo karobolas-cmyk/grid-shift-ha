@@ -414,6 +414,7 @@ class ThermalController:
         """Plan every zone; at most one non-emergency write per five-minute window."""
         async with self._lock:
             outdoor = await self._outdoor(now) if self.enabled else None
+            planning_outdoor = outdoor if outdoor is not None else 7.0
             rows = []
             stored = self.storage.state.thermal_state
             latest = [
@@ -493,25 +494,26 @@ class ThermalController:
                     row["status"] = "manual_override"
                     continue
                 try:
-                    target = thermal_target(rule, state, slots, now, outdoor, self._weather)
+                    target = thermal_target(
+                        rule, state, slots, now, planning_outdoor, self._weather
+                    )
                 except ValueError as err:
                     row["status"] = str(err)
                     continue
-                waiting = not slots or outdoor is None
+                waiting = not slots
                 row.update(
                     target=target,
                     observed=observed,
                     direction=state.state,
                     status="waiting_prices"
                     if not slots
-                    else "waiting_weather"
                     if waiting
                     else "planned",
                     cop=round(
                         cop(
                             rule["heater_type"],
                             rule["scop"],
-                            outdoor if outdoor is not None else 7,
+                            planning_outdoor,
                             state.state,
                         ),
                         2,
@@ -579,6 +581,8 @@ class ThermalController:
                 "configured_zone_count": len(self.config.get("climate_rules", [])),
                 "evaluated_at": now.isoformat(),
                 "outdoor_temperature": outdoor,
+                "planning_outdoor_temperature": planning_outdoor if self.enabled else None,
+                "outdoor_temperature_assumed": self.enabled and outdoor is None,
                 "zones": rows,
                 "phase_reservations_a": self.phase_reservations(now),
             }
