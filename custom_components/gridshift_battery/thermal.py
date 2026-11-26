@@ -454,12 +454,16 @@ class ThermalController:
                 if effective_direction(rule, state) is None:
                     row["status"] = "inactive_or_incompatible_hvac_mode"
                     continue
-                if (
-                    sensor_age_seconds(now, report_time(state))
-                    > self.config["thermal_sensor_max_age_seconds"]
-                    or number(state.attributes.get("current_temperature")) is None
-                ):
-                    row["status"] = "stale_temperature"
+                report_age = sensor_age_seconds(now, report_time(state))
+                row["report_age_seconds"] = (
+                    round(report_age, 1) if isfinite(report_age) else None
+                )
+                # Climate integrations often publish only when a value changes. A
+                # valid, available climate entity therefore remains controllable even
+                # when its last report is old. Keep the age for diagnostics instead of
+                # treating an unchanged temperature as a failed device.
+                if number(state.attributes.get("current_temperature")) is None:
+                    row["status"] = "temperature_unavailable"
                     continue
                 observed = target_state(state)
                 last_command = zone.get("last_command")

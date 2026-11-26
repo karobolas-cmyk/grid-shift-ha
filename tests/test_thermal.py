@@ -441,12 +441,22 @@ def test_expensive_cooling_setback_raises_target_and_hydronic_has_no_precooling(
     assert thermal_target(rule, entity, SLOTS, NOW, 30)["temperature"] == 21
 
 
-def test_stale_indoor_sensor_never_receives_a_new_target():
+def test_unchanged_available_climate_entity_remains_controllable():
     controller, states, calls = setup(enabled=True)
     states["climate.living_room"].last_reported = NOW - timedelta(hours=3)
     evaluate(controller)
+    assert len(calls) == 1
+    zone = controller.snapshot["zones"][0]
+    assert zone["status"] == "confirmed"
+    assert zone["report_age_seconds"] == 3 * 60 * 60
+
+
+def test_missing_current_temperature_still_blocks_a_write():
+    controller, states, calls = setup(enabled=True)
+    states["climate.living_room"].attributes.pop("current_temperature")
+    evaluate(controller)
     assert calls == []
-    assert controller.snapshot["zones"][0]["status"] == "stale_temperature"
+    assert controller.snapshot["zones"][0]["status"] == "temperature_unavailable"
 
 
 def test_multiple_zones_do_not_write_or_start_together():
